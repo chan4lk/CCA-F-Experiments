@@ -1,0 +1,10 @@
+[project]
+name = "ccaf"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "anthropic>=1.0.0",
+    "dotenv>=0.9.9",
+]
