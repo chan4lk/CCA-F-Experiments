@@ -216,7 +216,9 @@ class SubagentTracker:
                 "tool_input": tool_input,
                 "parent_tool_use_id": self._current_parent_id
             })
-        elif tool_name != 'Task':  # Skip Task calls for main agent (handled by spawn message)
+        # Skip delegation calls for the main agent - handled by the spawn message.
+        # The tool is named 'Agent' since Claude Code v2.1.63; 'Task' is the old name.
+        elif tool_name not in ('Task', 'Agent'):
             # Main agent tool call
             self._log_tool_use("MAIN AGENT", tool_name, tool_input)
             self._log_to_jsonl({
