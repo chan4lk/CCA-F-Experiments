@@ -19,6 +19,8 @@ def process_assistant_message(msg: Any, tracker: Any, transcript_file: Any) -> N
     for block in msg.content:
         block_type = type(block).__name__
 
+        transcript_file.write(f"block type: {block_type}\n")
+
         if block_type == 'TextBlock':
             # Add newline if a tool was just used
             if _tool_just_used:
@@ -28,14 +30,16 @@ def process_assistant_message(msg: Any, tracker: Any, transcript_file: Any) -> N
 
         if block_type == 'ToolUseBlock':
             _tool_just_used = True
+            transcript_file.write(f"block type: {block_type}\n, block name: {block.name}\n")
 
-            if block.name == 'Task':
+            # 'Agent' since Claude Code v2.1.63; 'Task' is the old name.
+            if block.name in ('Task', 'Agent'):
                 subagent_type = block.input.get('subagent_type', 'unknown')
                 description = block.input.get('description', 'no description')
 
                 prompt = block.input.get('prompt', '')
                 
-                subagent_id = tracker.register_subagent(
+                subagent_id = tracker.register_subagent_spawn(
                     tool_use_id=block.id,
                     subagent_type=subagent_type,
                     description=description,
