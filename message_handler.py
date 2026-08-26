@@ -32,7 +32,8 @@ def process_assistant_message(msg: Any, tracker: Any, transcript_file: Any) -> N
             _tool_just_used = True
             transcript_file.write(f"block type: {block_type}\n, block name: {block.name}\n")
 
-            if block.name == 'Agent':
+            # 'Agent' since Claude Code v2.1.63; 'Task' is the old name.
+            if block.name in ('Task', 'Agent'):
                 subagent_type = block.input.get('subagent_type', 'unknown')
                 description = block.input.get('description', 'no description')
 
