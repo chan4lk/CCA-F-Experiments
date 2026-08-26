@@ -49,11 +49,11 @@ async def main():
         # SESSION-wide, not coordinator-only: WebSearch/WebFetch must be listed
         # here or search-agent cannot have them either and the coordinator
         # ends up doing the searching itself.
-        tools=["Agent", "WebSearch", "WebFetch"],
+        tools=["Agent",],
         model=MODEL,
         max_budget_usd=1.0,
         env={
-            "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1",
+            "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "2",
             "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENT": "5"
         },
         hooks=hooks
@@ -63,7 +63,7 @@ async def main():
         async with ClaudeSDKClient(options=options) as client:
             while True:
                 try:
-                    question = input("Enter your question: ")
+                    question = input("\nEnter your question: ")
                 except (EOFError, KeyboardInterrupt):
                     break
 
