@@ -52,8 +52,9 @@ async def main():
         tools=["Agent", "WebSearch", "WebFetch"],
         model=MODEL,
         max_budget_usd=1.0,
+        mcp_servers={},
         env={
-            "CLAUDE_CODE_MAX_SUBAGNENT_SPAWN_DEPTH": "1",
+            "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1",
             "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENT": "5"
         },
         hooks=hooks
