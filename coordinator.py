@@ -49,7 +49,7 @@ async def main():
         # SESSION-wide, not coordinator-only: WebSearch/WebFetch must be listed
         # here or search-agent cannot have them either and the coordinator
         # ends up doing the searching itself.
-        tools=["Agent",],
+        tools=["Agent", "WebSearch", "WebFetch"],
         model=MODEL,
         max_budget_usd=1.0,
         env={
