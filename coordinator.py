@@ -46,7 +46,10 @@ async def main():
         "You cannot search yourself. Synthesize their reports into a report where every claim carries a source URL.",
         allowed_tools=["Agent", "WebSearch", "WebFetch"],
         agents={"search-agent": search_agent},
-        tools=["Agent"],
+        # SESSION-wide, not coordinator-only: WebSearch/WebFetch must be listed
+        # here or search-agent cannot have them either and the coordinator
+        # ends up doing the searching itself.
+        tools=["Agent", "WebSearch", "WebFetch"],
         model=MODEL,
         max_budget_usd=1.0,
         env={
