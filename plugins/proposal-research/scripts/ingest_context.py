@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from workspace import read_jsonl  # noqa: E402
+from workspace import normalize_url, read_jsonl  # noqa: E402
 
 STALE_DAYS = 90
 LEDGER_EXPORT = "06-Sources/ledger-export.jsonl"
@@ -79,7 +79,7 @@ def carry_forward(prior: list[dict], now: datetime) -> list[dict]:
         if any(v.get("verdict") != "CONFIRMED" for v in verdicts):
             continue
 
-        url_key = row["url"].split("#", 1)[0].rstrip("/")
+        url_key = normalize_url(row["url"])
         claim_text = row.get("claim", "")
         dedup_key = (url_key, claim_text)
         if dedup_key in seen:

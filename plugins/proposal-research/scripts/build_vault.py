@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from workspace import read_jsonl  # noqa: E402
+from workspace import iter_fence_state, read_jsonl  # noqa: E402
 
 TEMPLATE_ROOT = Path(__file__).resolve().parents[1] / "templates" / "vault"
 
@@ -46,12 +46,7 @@ def parse_sections(text: str) -> dict[str, str]:
     sections: dict[str, str] = {}
     current: str | None = None
     buffer: list[str] = []
-    in_fence = False
-    for line in (text or "").splitlines():
-        # Track fence state
-        if line.strip().startswith("```"):
-            in_fence = not in_fence
-
+    for line, in_fence in iter_fence_state(text):
         # Check for H2 heading (only if not in fence)
         if line.startswith("## ") and not in_fence:
             if current is not None:
@@ -71,13 +66,8 @@ def split_subsections(text: str) -> tuple[str, list[tuple[str, str]]]:
     subs: list[tuple[str, str]] = []
     current_title: str | None = None
     current_buffer: list[str] = []
-    in_fence = False
 
-    for line in (text or "").splitlines():
-        # Track fence state
-        if line.strip().startswith("```"):
-            in_fence = not in_fence
-
+    for line, in_fence in iter_fence_state(text):
         # Check for H3 heading (only if not in fence)
         if line.startswith("### ") and not in_fence:
             # Save the previous subsection if any

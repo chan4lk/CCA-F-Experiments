@@ -156,6 +156,16 @@ def test_normalize_url_handles_none():
     assert verify_pack.normalize_url(None) == ""
 
 
+def test_verdict_row_with_no_claim_id_is_not_bucketed(tmp_path):
+    """build_vault guards this key; the gate must guard it identically."""
+    verdicts = list(build.VERDICTS_OK) + [
+        {"verdict": "CONFIRMED", "validator_agent_id": "val-x", "validator_model": "haiku"},
+    ]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, verdicts=verdicts))
+    assert None not in ctx.verdicts
+    assert set(ctx.verdicts) == {"C001", "C002"}
+
+
 # --- check 3: fetch provenance -----------------------------------------
 
 def test_clean_workspace_passes_provenance(tmp_path):
@@ -286,6 +296,34 @@ def test_explicit_no_citation_marker_exempts_a_paragraph(tmp_path):
         "<!-- no-citation: framing, not a factual claim -->\n"
         "This section compares the two candidate architectures against the client's "
         "stated priorities rather than asserting any new external fact.\n\n"
+        "## Unverified & excluded",
+    )
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert fails(verify_pack.check_uncited_prose(ctx)) == []
+
+
+def test_a_lone_closing_fence_does_not_swallow_the_rest_of_the_pack(tmp_path):
+    """The fence state machine must not fail open.
+
+    A fenced block whose closing fence is preceded by a blank line used to leave
+    the parser stuck inside code, so every later paragraph was silently skipped
+    and an uncited assertion after a code block passed the gate.
+    """
+    pack = build.PACK_OK.replace(
+        "## Unverified & excluded",
+        "```\nsome code\n\n```\n\n"
+        "Copilot Studio is clearly the stronger option for this client given the "
+        "existing Microsoft investment and the team's familiarity with Power Platform.\n\n"
+        "## Unverified & excluded",
+    )
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert any("stronger option" in f.message for f in fails(verify_pack.check_uncited_prose(ctx)))
+
+
+def test_fenced_code_is_still_exempt_after_a_normal_fence(tmp_path):
+    pack = build.PACK_OK.replace(
+        "## Unverified & excluded",
+        "```\nsome code block with plenty of words inside it for length here\n```\n\n"
         "## Unverified & excluded",
     )
     ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
