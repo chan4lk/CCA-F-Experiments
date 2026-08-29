@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -59,6 +60,15 @@ def validate_claim(row: dict, existing_ids: set[str]) -> list[str]:
     url = row.get("url") or ""
     if url and not str(url).startswith(("http://", "https://")):
         errors.append("url must be an http(s) URL")
+
+    raw_hash = row.get("raw_hash")
+    if raw_hash is not None:
+        text = str(raw_hash).strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{8,}", text):
+            errors.append(
+                "raw_hash must be the hex hash headroom_compress returned, or omitted "
+                f"entirely — got {raw_hash!r}. Do not write a placeholder."
+            )
 
     quote = row.get("quote") or ""
     if quote.strip() and len(quote.split()) > MAX_QUOTE_WORDS:

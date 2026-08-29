@@ -159,3 +159,17 @@ def test_synthesizer_marker_guidance_agrees_with_the_writer():
     """Both agents write packs the same gate reads; the rule cannot differ."""
     text = (AGENTS / "synthesizer.md").read_text(encoding="utf-8").lower()
     assert "one marker per block" in text
+
+
+def test_researcher_is_warned_off_unvalidatable_sources():
+    """A real run lost 28 claims to sources no validator could re-fetch."""
+    text = (AGENTS / "researcher.md").read_text(encoding="utf-8")
+    assert "web.archive.org" in text
+    assert "10485760" in text or "10 MB" in text
+    assert "curl" in text and "WebFetch on the same URL" in text
+
+
+def test_researcher_is_told_raw_hash_is_optional_and_not_a_placeholder():
+    text = (AGENTS / "researcher.md").read_text(encoding="utf-8")
+    assert "n/a" in text
+    assert "session-scoped" in text

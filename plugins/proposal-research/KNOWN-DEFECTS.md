@@ -6,15 +6,46 @@ question: *"AML system architecture for sri lankan banks with enterprise deploym
 Every defect below was observed in that run, not inferred from reading the code. Each entry records
 what actually happened, what it cost, and what a fix would look like.
 
-**Status summary: 1 of 5 fixed, uncommitted.**
+**Status summary: all 5 addressed, plus 2 found while fixing them. Committed 2026-08-29.**
 
 | # | Defect | Severity | Status |
 |---|---|---|---|
-| 1 | Validators cannot read PDFs | Critical | **Fixed in source, uncommitted** |
-| 2 | `curl` is invisible to the provenance hook | Critical | Not fixed |
-| 3 | `web.archive.org` is unreachable to WebFetch | Moderate | Not fixed (harness limit) |
-| 4 | `validator-tool-restrictions` check never fires | High | Not fixed |
-| 5 | WebFetch's 10 MB ceiling silently drops large PDFs | Moderate | Not fixed (harness limit) |
+| 1 | Validators cannot read PDFs | Critical | **Fixed** — Bash granted, blindness re-enforced by a PreToolUse guard (`bf9c405`) |
+| 2 | `curl` is invisible to the provenance hook | Critical | **Mitigated** — `add_claim.py` warns at append time, while the researcher still has the page (`3429930`) |
+| 3 | `web.archive.org` is unreachable to WebFetch | Moderate | **Mitigated** — `researcher.md` forbids recording such a URL as a claim's source |
+| 4 | `validator-tool-restrictions` check never fires | High | **Fixed** — and it was wider than recorded; see below (`3ded31c`) |
+| 5 | WebFetch's 10 MB ceiling silently drops large PDFs | Moderate | **Mitigated** — `researcher.md` warns and directs to an HTML or smaller source |
+| 6 | `raw_hash` is a write-only field and its documented purpose is false | Moderate | **Fixed** — validated on append, spec claim retracted |
+| 7 | Orchestration, not research, dominated token cost | High | **Fixed** — verdicts batch; SKILL gained context discipline (`3429930`) |
+
+### Defect 4 was wider than this file recorded
+
+The same bare-vs-namespaced comparison also sat in `add_verdict.resolve_validator_agent_id`,
+so `--infer-agent-from` — the path `SKILL.md` told the orchestrator to use — could never match
+a validator and always refused. Both sites now compare through one `workspace.agent_role()`
+helper. The audit this file suggested ("worth auditing the other checks for the same
+assumption") was the right instinct and found a second dead path.
+
+### Defect 6 — `raw_hash` (found while investigating token cost)
+
+232 of 277 claims carried a hash, so Headroom did run (~75 compressions). But retrieval after
+the run returns *"Content not found. It may have expired"* and `headroom memory stats` reports
+`Total Memories: 0` — the store is **session-scoped**. The design spec claimed the hash let the
+human gate "retrieve the original page as it was when fetched… the evidence surviving the page
+changing underneath the proposal weeks later." That was false and is now retracted in the spec.
+Nine claims had recorded the literal string `"n/a"` (one wrote
+`"n/a-direct-quote-verified-on-fetched-page"`) because nothing validated the field.
+
+### Defect 7 — where the tokens actually went
+
+Of 278M tokens processed, **172M was the orchestrator's own context** — 475 turns re-reading
+~362,000 tokens each — against 90M for all ninety subagents combined. Roughly 468 of those
+turns were recording 468 verdicts one at a time. `add_verdict --batch` collapses that to ~24
+turns. Headroom, which compresses page content *inside subagents*, was optimising the smaller
+half of the bill.
+
+Batches carry an explicit `validator_agent_id` rather than inferring it, which also removes
+the record-before-next-dispatch ordering constraint that made this run painful.
 
 Defects 1 and 2 compound each other: the workaround for 1 (read PDFs with `curl`) triggers 2
 (retrievals become invisible), and the workaround for 2 (call WebFetch first anyway) is defeated by 1

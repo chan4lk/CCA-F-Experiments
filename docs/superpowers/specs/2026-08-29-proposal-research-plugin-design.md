@@ -153,9 +153,13 @@ Headroom's marginal saving is smaller than it first appears. It pays in three pl
 1. **Inside a researcher's own loop.** A researcher fetching 6-10 pages for one sub-question
    drowns in its own context. Each `WebFetch` -> `headroom_compress` -> retain compressed text
    plus hash, discard raw. The agent stays coherent to the end of its sub-question.
-2. **Audit trail.** The `raw_hash` column lets the human gate retrieve *the original page as it
-   was when fetched*, without re-fetching. This is not token saving — it is the evidence
-   surviving the page changing underneath the proposal weeks later.
+2. ~~**Audit trail.**~~ **This claim was wrong and is retracted.** The spec said `raw_hash`
+   lets the human gate retrieve *the original page as it was when fetched*. It does not:
+   Headroom's store is **session-scoped**, so every hash is dead once the run's session ends.
+   Verified after the first real run — 232 claims carried a hash, `headroom memory stats`
+   reported `Total Memories: 0`, and retrieval returned "Content not found. It may have
+   expired." `raw_hash` is a within-session convenience only. It buys nothing after the run,
+   and nothing in the pipeline reads it back.
 3. **Synthesizer and gap-hunter** read the entire confirmed ledger; compressed bodies keep that
    read affordable at 200+ claims.
 
