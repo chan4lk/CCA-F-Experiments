@@ -96,6 +96,20 @@ def note_filename(title: str) -> str:
     return f"{_UNSAFE.sub('-', title).strip()}.md"
 
 
+def wikilink(title: str) -> str:
+    """Link to a note by its FILENAME, showing its original title.
+
+    note_filename rewrites `/\\:*?"<>|` out of a title, so a section called
+    `### Licensing: seat costs` is filed as `Licensing- seat costs.md`. Linking
+    to the raw title then resolves to nothing and fails the link check — a colon
+    in a heading is the most common punctuation an LLM will emit, so this was a
+    hard failure on ordinary input. The `[[target|display]]` form keeps the
+    heading readable in the vault while pointing at the file that exists.
+    """
+    target = note_filename(title).removesuffix(".md")
+    return f"[[{target}]]" if target == title else f"[[{target}|{title}]]"
+
+
 def render_note(title: str, tags: list[str], body: str, meta: dict | None = None, generated: bool = True) -> str:
     lines = ["---", f"tags: [{', '.join(tags)}]"]
     if generated:
@@ -303,7 +317,7 @@ def _render_brief(sections: dict, linked_titles: dict, claims: dict,
     lines.append("- [[Decision Cheatsheet]]")
     for heading, (_folder, _tag) in SECTION_MAP.items():
         for title in linked_titles.get(heading, []):
-            lines.append(f"- [[{title}]]")
+            lines.append(f"- {wikilink(title)}")
     lines += [
         "- [[Open Questions]]",
         "- [[Unverified Claims]]",
