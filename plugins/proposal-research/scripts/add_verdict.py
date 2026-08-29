@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from workspace import (  # noqa: E402
+    agent_role,
     CLAIM_ID_RE,
     VERDICTS,
     append_jsonl,
@@ -68,7 +69,7 @@ def validators_that_fetched(workspace: Path, url: str) -> list[str]:
     target = normalize_url(url)
     found: list[str] = []
     for row in read_jsonl(Path(workspace) / "fetch-log.jsonl"):
-        if row.get("agent_type") != "validator":
+        if agent_role(row.get("agent_type")) != "validator":
             continue
         if normalize_url(row.get("url")) != target:
             continue

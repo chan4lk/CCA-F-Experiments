@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from workspace import (  # noqa: E402
     MAX_QUOTE_WORDS,
+    agent_role,
     iter_fence_state,
     normalize_url,
     read_jsonl,
@@ -273,7 +274,7 @@ def check_validator_tool_restrictions(ctx: Context) -> list[Finding]:
     """Validators must not search. Searching means shopping for a friendlier source."""
     findings = []
     for row in ctx.fetches:
-        if row.get("agent_type") == "validator" and row.get("tool") == "WebSearch":
+        if agent_role(row.get("agent_type")) == "validator" and row.get("tool") == "WebSearch":
             findings.append(Finding(
                 "validator-tool-restrictions", FAIL,
                 f"validator {row.get('agent_id')} called WebSearch "

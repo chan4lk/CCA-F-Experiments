@@ -114,6 +114,17 @@ def read_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def agent_role(agent_type: str | None) -> str:
+    """The bare role from a hook payload's agent_type.
+
+    Claude Code namespaces a plugin's agents, so the fetch log holds
+    `proposal-research:validator`, not `validator`. Two checks compared against
+    the bare string and were therefore dead for every one of the 531 retrievals
+    in the first real run. Compare roles through this.
+    """
+    return (agent_type or "").rsplit(":", 1)[-1]
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
