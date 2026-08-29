@@ -473,13 +473,71 @@ def test_table_delimiter_rows_are_never_flagged():
     assert [u.text for u in units] == ["a b", "x y"]
 
 
-def test_blockquotes_remain_exempt(tmp_path):
-    """A blockquote carries verbatim source text, not the pack's own assertion."""
-    pack = build.PACK_OK.replace(
-        "## Unverified & excluded",
-        "> A maximum of ten tools per MCP server connection is supported by the product.\n\n"
-        "## Unverified & excluded",
-    )
+def _pack_with(body: str) -> str:
+    """PACK_OK with `body` spliced in just above the appendix."""
+    return build.PACK_OK.replace("## Unverified & excluded", body + "\n## Unverified & excluded")
+
+
+def test_uncited_blockquote_prose_fails(tmp_path):
+    """A blockquote asserts as loudly as a paragraph; `>` is not an exemption.
+
+    Replaces test_blockquotes_remain_exempt, which asserted the opposite. The
+    final whole-branch review reproduced a pack whose caps, prices and
+    availability dates all sat inside `> ` and returned GATE: PASS.
+    """
+    pack = _pack_with(
+        "> Copilot Studio enforces a hard cap of ten MCP tools per server connection.\n\n")
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    findings = fails(verify_pack.check_uncited_prose(ctx))
+    assert len(findings) == 1
+    assert "blockquote" in findings[0].message
+
+
+def test_uncited_blockquoted_list_items_fail(tmp_path):
+    """Blockquoted bullets were swallowed twice over — as quote and as list."""
+    pack = _pack_with(
+        "> - Licensing is priced at 200 USD per tenant per month on the premium tier.\n"
+        "> - MCP support is generally available across every commercial region worldwide today with no exceptions.\n\n")
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert len(fails(verify_pack.check_uncited_prose(ctx))) == 2
+
+
+def test_uncited_blockquoted_table_row_fails(tmp_path):
+    """A table inside a quote is still a table of assertions."""
+    pack = _pack_with(
+        "> | Option | Cap | Price | Region |\n"
+        "> |---|---|---|---|\n"
+        "> | Copilot Studio with MCP | ten tools per server connection | 200 USD per tenant monthly | generally available worldwide |\n\n")
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    findings = fails(verify_pack.check_uncited_prose(ctx))
+    assert len(findings) == 1
+    assert "blockquote table row" in findings[0].message
+
+
+def test_cited_blockquote_passes(tmp_path):
+    """Quoting a source is fine; quoting it without attribution is not."""
+    pack = _pack_with(
+        "> Copilot Studio enforces a hard cap of ten MCP tools per connection [C001].\n\n")
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert fails(verify_pack.check_uncited_prose(ctx)) == []
+
+
+def test_marker_above_a_blockquote_exempts_it(tmp_path):
+    """The escape hatch works for quotes exactly as it does for lists."""
+    pack = _pack_with(
+        "<!-- no-citation: the client's own words, quoted from the brief -->\n"
+        "> We need this shipped before the regulator's audit window closes in March.\n\n")
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert fails(verify_pack.check_uncited_prose(ctx)) == []
+
+
+def test_headings_and_fenced_code_stay_exempt(tmp_path):
+    """The two shapes that are genuinely structure, not assertion, still pass."""
+    pack = _pack_with(
+        "### A heading that is quite long indeed and carries many words in it\n\n"
+        "```\n"
+        "> a quoted line inside a fence is code, not an assertion at all here\n"
+        "```\n\n")
     ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
     assert fails(verify_pack.check_uncited_prose(ctx)) == []
 

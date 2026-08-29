@@ -300,40 +300,62 @@ class Unit(NamedTuple):
 def _split_block(block: str) -> list[Unit]:
     """Break one blank-line-delimited block into its assertion-bearing units.
 
-    A bullet and a table row assert facts exactly as a sentence does — an LLM
-    synthesizer emits caps, prices and availability in those shapes more often
-    than in prose — so each is its own unit. Only genuine structure is dropped:
-    headings, table delimiter rows, and blockquotes, which carry verbatim source
-    text rather than the pack's own assertions.
+    A bullet, a table row and a blockquote assert facts exactly as a sentence
+    does — an LLM synthesizer emits caps, prices and availability in those
+    shapes more often than in prose — so each is its own unit. A blockquote is
+    dedented and re-split, so quoted bullets and quoted tables are units too:
+    quoting a source is fine, quoting it without attribution is not.
+
+    Only genuine structure is dropped: headings, table delimiter rows, and
+    fenced code (handled by the caller).
     """
     units: list[Unit] = []
     paragraph: list[str] = []
+    quoted: list[str] = []
 
     def flush() -> None:
         if paragraph:
             units.append(Unit("paragraph", " ".join(paragraph)))
             paragraph.clear()
 
+    def flush_quote() -> None:
+        """Re-split the quote's own content, so `> - bullet` is a bullet."""
+        if quoted:
+            inner = "\n".join(quoted)
+            quoted.clear()
+            units.extend(
+                Unit(f"blockquote {unit.kind}", unit.text) for unit in _split_block(inner)
+            )
+
     for line in block.splitlines():
         stripped = line.strip()
         if not stripped:
             flush()
-        elif stripped.startswith("#") or stripped.startswith(">"):
+            flush_quote()
+        elif stripped.startswith(">"):
             flush()
+            quoted.append(stripped[1:].lstrip())
+        elif stripped.startswith("#"):
+            flush()
+            flush_quote()
         elif stripped.startswith("|"):
             flush()
+            flush_quote()
             if not TABLE_DELIMITER_RE.match(stripped):
                 cells = [c.strip() for c in stripped.strip("|").split("|")]
                 units.append(Unit("table row", " ".join(c for c in cells if c)))
         elif LIST_ITEM_RE.match(stripped):
             flush()
+            flush_quote()
             units.append(Unit("list item", LIST_ITEM_RE.sub("", stripped)))
-        elif units and units[-1].kind == "list item" and not paragraph:
+        elif units and units[-1].kind == "list item" and not paragraph and not quoted:
             # A wrapped continuation line belongs to the item above it.
             units[-1] = Unit("list item", f"{units[-1].text} {stripped}")
         else:
+            flush_quote()
             paragraph.append(stripped)
     flush()
+    flush_quote()
     return units
 
 
