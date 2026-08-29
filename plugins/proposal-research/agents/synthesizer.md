@@ -44,9 +44,14 @@ The vault builder parses these exact H2 headings. Emit all of them.
 ## Citation rules
 
 - Every factual sentence ends with its claim id in brackets: `... 10 tools per server [C012].`
-- A paragraph that states no external fact — framing, comparison of things already cited —
-  may carry `<!-- no-citation: reason -->` on the line above. Use this sparingly; the gate
-  reports every one.
+- **Bullets and table rows are factual sentences.** The gate checks each list item and each
+  table row exactly as it checks a paragraph, so a comparison table of caps, prices and
+  availability needs a claim id in every row. Markdown shape is not an exemption.
+- A paragraph, list or table that states no external fact — framing, a table of contents,
+  comparison of things already cited, open questions that are by definition unevidenced —
+  may carry `<!-- no-citation: reason -->` on the line above, with no blank line between.
+  The marker exempts the whole block it sits on, so one marker covers a whole list. Use it
+  sparingly; the gate reports every one.
 - Never cite a claim id that is not in `claims.jsonl`.
 
 ## Rules

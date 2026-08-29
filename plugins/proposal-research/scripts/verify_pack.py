@@ -250,41 +250,95 @@ NO_CITATION_MARKER = "<!-- no-citation:"
 MIN_FACTUAL_WORDS = 12
 
 
-def _body_paragraphs(body: str) -> list[str]:
-    """Prose paragraphs only: no headings, tables, list items, or code blocks."""
-    paragraphs = []
+LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+TABLE_DELIMITER_RE = re.compile(r"^\|?[\s:|-]+\|?$")
+
+
+class Unit(NamedTuple):
+    """One assertion-bearing chunk of the pack body."""
+    kind: str
+    text: str
+
+
+def _split_block(block: str) -> list[Unit]:
+    """Break one blank-line-delimited block into its assertion-bearing units.
+
+    A bullet and a table row assert facts exactly as a sentence does — an LLM
+    synthesizer emits caps, prices and availability in those shapes more often
+    than in prose — so each is its own unit. Only genuine structure is dropped:
+    headings, table delimiter rows, and blockquotes, which carry verbatim source
+    text rather than the pack's own assertions.
+    """
+    units: list[Unit] = []
+    paragraph: list[str] = []
+
+    def flush() -> None:
+        if paragraph:
+            units.append(Unit("paragraph", " ".join(paragraph)))
+            paragraph.clear()
+
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            flush()
+        elif stripped.startswith("#") or stripped.startswith(">"):
+            flush()
+        elif stripped.startswith("|"):
+            flush()
+            if not TABLE_DELIMITER_RE.match(stripped):
+                cells = [c.strip() for c in stripped.strip("|").split("|")]
+                units.append(Unit("table row", " ".join(c for c in cells if c)))
+        elif LIST_ITEM_RE.match(stripped):
+            flush()
+            units.append(Unit("list item", LIST_ITEM_RE.sub("", stripped)))
+        elif units and units[-1].kind == "list item" and not paragraph:
+            # A wrapped continuation line belongs to the item above it.
+            units[-1] = Unit("list item", f"{units[-1].text} {stripped}")
+        else:
+            paragraph.append(stripped)
+    flush()
+    return units
+
+
+def _body_units(body: str) -> list[Unit]:
+    """Every unit of the pack body that must carry a citation.
+
+    Fenced code is dropped whole; a block carrying the `<!-- no-citation: -->`
+    marker is dropped whole, so one marker above a list or table exempts it.
+    """
+    units: list[Unit] = []
     outside_fences = "\n".join(
         line for line, in_fence in iter_fence_state(body) if not in_fence
     )
     for block in outside_fences.split("\n\n"):
         block = block.strip()
-        if not block:
+        if not block or NO_CITATION_MARKER in block:
             continue
-        first = block.splitlines()[0].lstrip()
-        if first.startswith(("#", "|", ">", "-", "*", "+")):
-            continue
-        paragraphs.append(block)
-    return paragraphs
+        units.extend(_split_block(block))
+    return units
 
 
 def check_uncited_prose(ctx: Context) -> list[Finding]:
-    """Check 5: no factual body paragraph lacks a citation.
+    """Check 5: no factual body statement lacks a citation.
 
-    A paragraph may opt out with an explicit `<!-- no-citation: reason -->`
-    marker, which keeps the exemption visible and auditable rather than silent.
+    Paragraphs, list items and table rows are all checked. Exempting bullets and
+    tables was the single hole through which a pack with no citations at all
+    could pass the gate: every other check keys off the citations that are
+    present, so this check is the only one that requires a citation to exist.
+
+    A block may opt out with an explicit `<!-- no-citation: reason -->` marker,
+    which keeps the exemption visible and auditable rather than silent.
     """
     findings = []
-    for para in _body_paragraphs(ctx.body):
-        if NO_CITATION_MARKER in para:
+    for unit in _body_units(ctx.body):
+        if len(unit.text.split()) < MIN_FACTUAL_WORDS:
             continue
-        if len(para.split()) < MIN_FACTUAL_WORDS:
+        if CITATION_RE.search(unit.text):
             continue
-        if CITATION_RE.search(para):
-            continue
-        preview = " ".join(para.split())[:90]
+        preview = " ".join(unit.text.split())[:90]
         findings.append(Finding(
             "uncited-prose", FAIL,
-            f"factual paragraph carries no citation: \"{preview}...\"",
+            f"factual {unit.kind} carries no citation: \"{preview}...\"",
         ))
     return findings
 
