@@ -10,3 +10,4 @@ wheels/
 .venv
 logs/
 .claude/worktrees/
+.DS_Store
