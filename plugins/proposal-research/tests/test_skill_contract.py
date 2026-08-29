@@ -26,7 +26,7 @@ def test_skill_file_exists_with_name_and_description():
 def test_skill_documents_every_phase():
     text = SKILL.read_text()
     for phase in ["Phase 0", "Phase 0.5", "Phase 1", "Phase 2", "Phase 3",
-                  "Phase 4", "Phase 5", "Phase 5b", "Phase 6", "Phase 7"]:
+                  "Phase 4", "Phase 5", "Phase 6", "Phase 6b", "Phase 7"]:
         assert phase in text, phase
 
 
@@ -54,13 +54,64 @@ def phase_section(text: str, heading: str) -> str:
 
 
 def test_skill_pins_the_model_for_every_role():
+    """Matched within ONE LINE, not across the phase with DOTALL.
+
+    Phase 3 names both haiku and sonnet — the validator and its escalation — so a
+    DOTALL match still succeeded with the two roles swapped. Every dispatch
+    instruction states its role and its model on one line, so the line is the
+    right scope and a swap now fails.
+    """
     text = SKILL.read_text()
     for role, model in [("planner", "sonnet"), ("researcher", "sonnet"),
                         ("validator", "haiku"), ("gap-hunter", "opus"),
                         ("synthesizer", "fable"), ("proposal-writer", "fable")]:
         section = phase_section(text, PHASE_FOR_ROLE[role])
-        pattern = rf"dispatch.*`{role}`.*model `{model}`"
-        assert re.search(pattern, section, re.IGNORECASE | re.DOTALL), f"{role} -> {model}"
+        pattern = rf"dispatch[^\n]*`{role}`[^\n]*model `{model}`"
+        assert re.search(pattern, section, re.IGNORECASE), f"{role} -> {model}"
+
+
+def test_swapping_the_phase_3_models_fails_the_pairing_check():
+    """The check that the check works. This is the weakness M5 named."""
+    section = phase_section(SKILL.read_text(), "Phase 3")
+    swapped = (section.replace("`haiku`", "\x00").replace("`sonnet`", "`haiku`")
+                      .replace("\x00", "`sonnet`"))
+    assert not re.search(r"dispatch[^\n]*`validator`[^\n]*model `haiku`", swapped, re.I)
+
+
+def test_skill_pins_the_escalation_model_to_sonnet():
+    """Nothing pinned the escalation model at all; it is the whole point of the pass."""
+    section = phase_section(SKILL.read_text(), "Phase 3")
+    assert re.search(r"\*\*Escalation:\*\*[^\n]*", section)
+    escalation = section[section.index("**Escalation:**"):]
+    assert re.search(r"second\s+validator, \*\*model `sonnet`\*\*", escalation, re.S), \
+        "Phase 3 must pin the escalation validator to sonnet"
+
+
+def test_skill_requires_two_distinct_validators_for_a_material_claim():
+    """CRITICAL 2: the same validator ruling twice satisfied the old rule."""
+    section = phase_section(SKILL.read_text(), "Phase 3")
+    assert "two different validators" in section
+    assert "two\ndifferent models" in section or "two different models" in section
+
+
+def test_skill_requires_recording_each_verdict_before_the_next_dispatch():
+    section = phase_section(SKILL.read_text(), "Phase 3")
+    assert "immediately after that validator" in section
+    assert "--validator-agent-id" in section
+
+
+def test_skill_builds_the_vault_only_after_the_gate():
+    """I5: a vault built before the gate looks finished whether or not it passed."""
+    text = SKILL.read_text()
+    assert text.index("## Phase 6 — The gate") < text.index("## Phase 6b — Build the vault")
+    assert "## Phase 5b" not in text
+    vault_phase = phase_section(text, "Phase 6b")
+    assert "after the gate passes" in vault_phase
+
+
+def test_skill_derives_the_slug_with_the_plugin_slugifier():
+    """M6: workspace.slugify exists; the orchestrator must not slugify by hand."""
+    assert "workspace.slugify" in SKILL.read_text()
 
 
 def test_skill_states_the_human_gate_is_blocking():
