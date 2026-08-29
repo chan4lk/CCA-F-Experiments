@@ -115,6 +115,23 @@ def test_misleading_claim_with_caveat_present_passes(tmp_path):
     assert fails(verify_pack.check_verdict_admission(ctx)) == []
 
 
+def test_misleading_claim_with_missing_caveat_field_fails(tmp_path):
+    verdicts = [dict(v) for v in build.VERDICTS_OK]
+    verdicts[2].update(verdict="MISLEADING")
+    verdicts[2].pop("caveat", None)
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, verdicts=verdicts))
+    findings = fails(verify_pack.check_verdict_admission(ctx))
+    assert any("C002" in f.message and "caveat is absent" in f.message for f in findings)
+
+
+def test_misleading_claim_with_blank_caveat_fails(tmp_path):
+    verdicts = [dict(v) for v in build.VERDICTS_OK]
+    verdicts[2].update(verdict="MISLEADING", caveat="  ")
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, verdicts=verdicts))
+    findings = fails(verify_pack.check_verdict_admission(ctx))
+    assert any("C002" in f.message and "caveat is absent" in f.message for f in findings)
+
+
 def test_claims_cited_only_in_appendix_are_not_admission_checked(tmp_path):
     pack = """# Evidence Pack
 
