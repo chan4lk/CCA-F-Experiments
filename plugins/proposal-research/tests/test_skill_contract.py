@@ -213,3 +213,12 @@ def test_skill_has_context_discipline_rules():
     text = SKILL.read_text(encoding="utf-8")
     assert "Keeping your own context small" in text
     assert "path" in text and "not a paste" in text
+
+
+def test_skill_tells_the_orchestrator_its_own_prose_is_the_cost():
+    """Measured: ~500K of the ~600K context growth was the orchestrator's own
+    output, not tool results. The earlier guidance only addressed file dumps."""
+    section = SKILL.read_text(encoding="utf-8")
+    assert "your own prose" in section
+    assert "once per wave, not once per agent" in section
+    assert "Never restate an agent's output" in section
