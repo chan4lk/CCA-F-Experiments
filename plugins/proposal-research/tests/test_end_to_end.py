@@ -106,27 +106,62 @@ def test_full_run_passes_the_gate_and_builds_a_vault(tmp_path):
 
 
 def test_fabricated_citation_is_caught_by_the_gate(tmp_path):
-    """The failure this plugin exists to prevent."""
+    """The failure this plugin exists to prevent — isolated to the one check that
+    catches it.
+
+    A naive fixture lets three checks co-fire on the same scenario:
+    verdict-admission (missing the sonnet escalation pass), fetch-provenance
+    (the never-fetched URL — the intended mechanism), and validator-blindness,
+    which independently produces a matching "never retrieved" substring for the
+    same claim. Asserting on report text alone would stay green even if
+    fetch-provenance itself were gutted, because validator-blindness fires too.
+
+    This fixture removes the other two triggers so fetch-provenance is the only
+    check that CAN fail: the claim carries its full two CONFIRMED verdicts (so
+    verdict-admission has nothing to object to), and it is cited only from the
+    pack's appendix rather than the body — verdict-admission and
+    validator-blindness both walk body citations only, so an appendix-only
+    citation is invisible to them, while fetch-provenance walks every citation
+    in the pack, body and appendix alike. Both validators genuinely fetch a
+    real, retrieved URL, so their recorded identity is real; it is only the
+    claim's own cited URL that never appears in the fetch log.
+    """
     ws = tmp_path / "research" / "fabricated"
     ws.mkdir(parents=True)
 
-    simulate_fetch(ws, "res-1", "researcher")
+    pack = """# Evidence Pack: Fabrication Isolation
+
+## Summary
+
+This fixture isolates fetch-provenance from the checks that would otherwise co-fire.
+
+## Unverified & excluded
+
+The following claim cites a page that was never retrieved this session [C001].
+"""
+
     add_claim.main(["--workspace", str(ws), "--json", json.dumps({
         "id": "C001", "sub_q": "Q1", "tier": "material",
         "claim": "Copilot Studio supports 200 MCP tools per connection",
         "url": "https://learn.microsoft.com/never-fetched",  # never in the fetch log
         "quote": QUOTE, "source_type": "vendor_doc",
     })])
-    simulate_fetch(ws, "val-h1", "validator")
-    add_verdict.main(["--workspace", str(ws), "--infer-agent-from", URL,
-                      "--json", json.dumps({"claim_id": "C001", "verdict": "CONFIRMED",
-                                            "validator_model": "haiku", "quote": QUOTE})])
-    (ws / "evidence-pack.md").write_text(PACK, encoding="utf-8")
+    for agent_id, model in [("val-h1", "haiku"), ("val-s1", "sonnet")]:
+        simulate_fetch(ws, agent_id, "validator")  # fetches the real URL, not the claim's
+        add_verdict.main(["--workspace", str(ws), "--infer-agent-from", URL,
+                          "--json", json.dumps({"claim_id": "C001", "verdict": "CONFIRMED",
+                                                "validator_model": model, "quote": QUOTE})])
+    (ws / "evidence-pack.md").write_text(pack, encoding="utf-8")
 
+    # CLI path: the gate still fails end to end.
     assert verify_pack.main(["--workspace", str(ws)]) == 1
-    report = (ws / "verify-report.md").read_text()
-    assert "GATE: FAIL" in report
-    assert "never retrieved" in report
+    assert "GATE: FAIL" in (ws / "verify-report.md").read_text()
+
+    # Structural path: exactly fetch-provenance fired, nothing else — pinned by
+    # check name, not by a message substring another check could also produce.
+    ctx = verify_pack.load_context(ws)
+    fail_checks = {f.check for f in verify_pack.run_checks(ctx) if f.severity == verify_pack.FAIL}
+    assert fail_checks == {"fetch-provenance"}
 
 
 def test_internal_claim_cannot_reach_the_pack_as_material(tmp_path):
