@@ -45,8 +45,14 @@ def parse_sections(text: str) -> dict[str, str]:
     sections: dict[str, str] = {}
     current: str | None = None
     buffer: list[str] = []
+    in_fence = False
     for line in (text or "").splitlines():
-        if line.startswith("## "):
+        # Track fence state
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+
+        # Check for H2 heading (only if not in fence)
+        if line.startswith("## ") and not in_fence:
             if current is not None:
                 sections[current] = "\n".join(buffer).strip()
             current = line[3:].strip()
@@ -58,30 +64,51 @@ def parse_sections(text: str) -> dict[str, str]:
     return sections
 
 
-def split_subsections(text: str) -> list[tuple[str, str]]:
-    """Split a section body on H3 headings into [(title, body)]."""
+def split_subsections(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Split a section body on H3 headings into (preamble, [(title, body)])."""
+    preamble_lines: list[str] = []
     subs: list[tuple[str, str]] = []
-    current: str | None = None
-    buffer: list[str] = []
+    current_title: str | None = None
+    current_buffer: list[str] = []
+    in_fence = False
+
     for line in (text or "").splitlines():
-        if line.startswith("### "):
-            if current is not None:
-                subs.append((current, "\n".join(buffer).strip()))
-            current = line[4:].strip()
-            buffer = []
-        elif current is not None:
-            buffer.append(line)
-    if current is not None:
-        subs.append((current, "\n".join(buffer).strip()))
-    return subs
+        # Track fence state
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+
+        # Check for H3 heading (only if not in fence)
+        if line.startswith("### ") and not in_fence:
+            # Save the previous subsection if any
+            if current_title is not None:
+                subs.append((current_title, "\n".join(current_buffer).strip()))
+
+            # Start a new subsection
+            current_title = line[4:].strip()
+            current_buffer = []
+        elif current_title is not None:
+            # We're inside a subsection
+            current_buffer.append(line)
+        else:
+            # We're in the preamble (before the first H3)
+            preamble_lines.append(line)
+
+    # Save the last subsection if any
+    if current_title is not None:
+        subs.append((current_title, "\n".join(current_buffer).strip()))
+
+    preamble = "\n".join(preamble_lines).strip()
+    return preamble, subs
 
 
 def note_filename(title: str) -> str:
     return f"{_UNSAFE.sub('-', title).strip()}.md"
 
 
-def render_note(title: str, tags: list[str], body: str, meta: dict | None = None) -> str:
+def render_note(title: str, tags: list[str], body: str, meta: dict | None = None, generated: bool = True) -> str:
     lines = ["---", f"tags: [{', '.join(tags)}]"]
+    if generated:
+        lines.append("generated: true")
     for key, value in (meta or {}).items():
         lines.append(f"{key}: {value}")
     lines += ["---", "", f"# {title}", "", body.strip(), ""]
@@ -96,13 +123,31 @@ def copy_obsidian_config(vault: Path) -> None:
         shutil.copy2(item, target / item.name)
 
 
+def _is_generated_note(note_path: Path) -> bool:
+    """Check if a note has the 'generated: true' marker in frontmatter."""
+    try:
+        content = note_path.read_text(encoding="utf-8")
+        if content.startswith("---"):
+            lines = content.split("\n")
+            for line in lines[1:]:
+                if line.startswith("---"):
+                    # End of frontmatter
+                    break
+                if line.strip() == "generated: true":
+                    return True
+        return False
+    except Exception:
+        return False
+
+
 def _clear_generated(vault: Path) -> None:
     """Idempotency: drop previously generated notes before rewriting."""
     for name in VAULT_DIRS:
         folder = vault / name
         if folder.is_dir():
             for note in folder.glob("*.md"):
-                note.unlink()
+                if _is_generated_note(note):
+                    note.unlink()
 
 
 def build(workspace: Path, include_proposal: bool = False) -> Path:
@@ -125,16 +170,59 @@ def build(workspace: Path, include_proposal: bool = False) -> Path:
 
     claims = {r["id"]: r for r in read_jsonl(workspace / "claims.jsonl") if "id" in r}
 
-    # Sectioned notes
+    # Sectioned notes with collision detection
     linked_titles: dict[str, list[str]] = {}
     for heading, (folder, tag) in SECTION_MAP.items():
         titles = []
-        for title, body in split_subsections(sections.get(heading, "")):
-            (vault / folder / note_filename(title)).write_text(
+        written_filenames: dict[str, str] = {}  # filename -> title for collision detection
+
+        preamble, subsections = split_subsections(sections.get(heading, ""))
+
+        # Write preamble note if it exists
+        if preamble:
+            preamble_title = f"{heading} overview"
+            preamble_filename = note_filename(preamble_title)
+
+            # Check for empty filename
+            if not preamble_filename.rstrip(".md"):
+                raise ValueError(f"Title '{preamble_title}' sanitizes to an empty filename")
+
+            # Check for collision
+            if preamble_filename in written_filenames:
+                raise ValueError(
+                    f"Filename collision in {folder}: '{preamble_title}' and "
+                    f"'{written_filenames[preamble_filename]}' both map to '{preamble_filename}'"
+                )
+
+            written_filenames[preamble_filename] = preamble_title
+            (vault / folder / preamble_filename).write_text(
+                render_note(preamble_title, [tag, "proposal-research"], preamble),
+                encoding="utf-8",
+            )
+            titles.append(preamble_title)
+
+        # Write subsection notes
+        for title, body in subsections:
+            filename = note_filename(title)
+
+            # Check for empty filename
+            if not filename.rstrip(".md"):
+                raise ValueError(f"Title '{title}' sanitizes to an empty filename")
+
+            # Check for collision
+            if filename in written_filenames:
+                raise ValueError(
+                    f"Filename collision in {folder}: '{title}' and "
+                    f"'{written_filenames[filename]}' both map to '{filename}'"
+                )
+
+            written_filenames[filename] = title
+            (vault / folder / filename).write_text(
                 render_note(title, [tag, "proposal-research"], body),
                 encoding="utf-8",
             )
             titles.append(title)
+
         linked_titles[heading] = titles
 
     # 00-MOC
