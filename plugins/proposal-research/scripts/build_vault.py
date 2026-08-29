@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Phase 5b/7b — file the evidence pack into a self-contained Obsidian vault.
+"""Phase 6b/7 — file the evidence pack into a self-contained Obsidian vault.
+
+Runs only after the gate passes: a fully rendered vault is the artefact a reader
+trusts most, so one must never exist for a pack that failed.
 
 Deterministic on purpose. Fable writes the prose; this script does the filing,
 wikilinking and anchor generation. A model that files its own citations can

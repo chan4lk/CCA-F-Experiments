@@ -98,7 +98,7 @@ def test_full_run_passes_the_gate_and_builds_a_vault(tmp_path):
     assert verify_pack.main(["--workspace", str(ws)]) == 0
     assert "GATE: PASS" in (ws / "verify-report.md").read_text()
 
-    # Phase 5b — the vault must build with no broken links
+    # Phase 6b — the vault is built only after the gate passes
     assert build_vault.main(["--workspace", str(ws)]) == 0
     vault = ws / "vault"
     assert (vault / "00-MOC" / "Proposal Brief.md").is_file()

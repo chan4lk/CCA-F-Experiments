@@ -7,8 +7,12 @@ description: Research a product or solution proposal question across the web and
 
 You orchestrate. You do not search, and you do not write claims yourself.
 
-Set `WS` to `research/<slug>/` where `<slug>` is a slugified form of the question.
-Set `PR` to `${CLAUDE_PLUGIN_ROOT}`.
+Set `PR` to `${CLAUDE_PLUGIN_ROOT}`, then derive the slug with the plugin's own slugifier rather than by hand, so the workspace path is the same one the scripts compute:
+
+```bash
+SLUG=$(python3 -c "import sys; sys.path.insert(0, '$PR/scripts'); import workspace; print(workspace.slugify(sys.argv[1]))" "<the question>")
+WS="research/$SLUG"
+```
 
 ## Phase 0 — Intake
 
@@ -66,8 +70,8 @@ self-contained before fanning out — a vague sub-question wastes a whole resear
 
 ## Phase 2 — Research fan-out
 
-Dispatch one `researcher` per sub-question **in a single message so they run in parallel**,
-each **model `sonnet`**. Give each one:
+Dispatch one `researcher` per sub-question, **model `sonnet`**, in a single message so they
+run in parallel. Give each one:
 
 - its sub-question, stated in full, and its tier
 - the workspace path
@@ -123,15 +127,6 @@ stop: remaining gaps become the pack's "Open Questions" section.
 Dispatch `synthesizer`, **model `fable`**. It writes `evidence-pack.md` using the fixed H2
 section contract. Re-read the contract in the agent file if the build fails.
 
-## Phase 5b — Build the vault
-
-```bash
-python3 "$PR/scripts/build_vault.py" --workspace "$WS"
-```
-
-Broken links exit non-zero. Fix the pack and rebuild rather than editing the vault by hand —
-the vault is generated output.
-
 ## Phase 6 — The gate
 
 ```bash
@@ -149,6 +144,19 @@ pack as trustworthy, until it passes. Typical failures and their real causes:
 | `uncited-prose` | The synthesizer asserted something with no claim behind it — bullets and table rows count |
 | `claim-quote` | A cited ledger row has no verbatim quote, or one longer than 50 words |
 
+## Phase 6b — Build the vault
+
+**Only after the gate passes.** Building first would leave a fully rendered, openable
+vault on disk with nothing on it saying the pack behind it failed — and a vault is the
+artefact a reader trusts most, because it looks finished.
+
+```bash
+python3 "$PR/scripts/build_vault.py" --workspace "$WS"
+```
+
+Broken links exit non-zero. Fix the pack, re-run the gate, and rebuild rather than editing
+the vault by hand — the vault is generated output.
+
 ## HUMAN GATE
 
 Present `evidence-pack.md`, `verify-report.md`, and the vault path. Say plainly what is
@@ -163,9 +171,12 @@ Only after approval. Dispatch `proposal-writer`, **model `fable`**, with the app
 Then re-run both the gate and the builder over the proposal:
 
 ```bash
-python3 "$PR/scripts/verify_pack.py" --workspace "$WS" --pack proposal.md
-python3 "$PR/scripts/build_vault.py" --workspace "$WS" --with-proposal
+python3 "$PR/scripts/verify_pack.py" --workspace "$WS" --pack proposal.md \
+  && python3 "$PR/scripts/build_vault.py" --workspace "$WS" --with-proposal
 ```
+
+Chained on purpose, for the same reason Phase 6b follows Phase 6: a vault built over a
+proposal that failed the gate looks exactly like one that passed.
 
 ## Phase 7b — Offer to copy out
 

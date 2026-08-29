@@ -79,3 +79,32 @@ def test_no_agent_declares_a_model_in_frontmatter():
     """Models are passed at dispatch time; fable is not verified in frontmatter."""
     for name in EXPECTED_TOOLS:
         assert "model" not in parse_frontmatter(AGENTS / f"{name}.md")
+
+
+# --- the no-citation escape hatch ---------------------------------------
+
+def test_both_pack_writers_document_the_no_citation_marker():
+    """I6: only the synthesizer knew about it.
+
+    proposal-writer's mandated structure includes "Effort and phasing"
+    (explicitly "estimates, not findings") and "What we need from you" — long
+    uncited prose that check_uncited_prose fails when Phase 7 re-runs the gate
+    over proposal.md. Without the marker documented, the writer cannot pass a
+    gate its own required structure guarantees it will hit.
+    """
+    for name in ("synthesizer", "proposal-writer"):
+        text = (AGENTS / f"{name}.md").read_text(encoding="utf-8")
+        assert "<!-- no-citation:" in text, name
+
+
+def test_proposal_writer_is_told_which_sections_need_the_marker():
+    text = (AGENTS / "proposal-writer.md").read_text(encoding="utf-8")
+    assert "Effort and phasing" in text
+    assert "What we need from you" in text
+
+
+def test_both_pack_writers_are_told_bullets_and_tables_are_checked():
+    """CRITICAL 1 changed what the gate demands of markdown shape."""
+    for name in ("synthesizer", "proposal-writer"):
+        text = (AGENTS / f"{name}.md").read_text(encoding="utf-8").lower()
+        assert "bullets and table rows" in text, name

@@ -31,6 +31,16 @@ brief from the orchestrator.
 ## Citation rules
 
 - Every factual claim carries its id: `Copilot Studio caps MCP tools at 10 per server [C012].`
+- **Bullets and table rows are factual claims too.** The gate checks each list item and
+  each table row exactly as it checks a paragraph.
+- **"Effort and phasing" and "What we need from you" will fail the gate unless you mark
+  them.** Both are long prose that states no external fact, so put
+  `<!-- no-citation: reason -->` on the line above the block, with no blank line between —
+  for example `<!-- no-citation: effort estimate, not a finding -->`. The marker exempts
+  the whole block it sits on, so one marker covers a whole list. The gate re-runs over
+  your draft with the same checks it ran over the pack, and it reports every marker, so
+  the exemption stays visible rather than silent. Use it only where the text genuinely
+  asserts no external fact.
 - You may only cite ids that already appear in the approved pack. The gate re-runs over
   your draft with the same checks.
 - Where the pack marked a claim low confidence or attached a caveat, that caveat must
