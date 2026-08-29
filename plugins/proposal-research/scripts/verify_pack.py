@@ -128,7 +128,12 @@ def check_verdict_admission(ctx: Context) -> list[Finding]:
             if ruling.get("verdict") != "MISLEADING":
                 continue
             caveat = (ruling.get("caveat") or "").strip()
-            if caveat and caveat not in ctx.pack_text:
+            if not caveat:
+                findings.append(Finding(
+                    "verdict-admission", FAIL,
+                    f"{claim_id} was ruled MISLEADING but its caveat is absent",
+                ))
+            elif caveat not in ctx.pack_text:
                 findings.append(Finding(
                     "verdict-admission", FAIL,
                     f"{claim_id} was ruled MISLEADING but its caveat is absent from the "
