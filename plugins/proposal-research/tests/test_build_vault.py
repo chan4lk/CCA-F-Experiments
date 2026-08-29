@@ -584,3 +584,106 @@ None.
     note_path = vault / "01-Findings" / "md.md"
     assert note_path.is_file()
     assert "Markdown file format" in note_path.read_text()
+
+
+import json  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import ingest_context  # noqa: E402
+
+
+# --- Sources.md ---------------------------------------------------------
+
+def test_sources_note_is_written(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    assert (vault / "06-Sources" / "Sources.md").is_file()
+
+
+def test_sources_groups_by_source_type(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    text = (vault / "06-Sources" / "Sources.md").read_text()
+    assert "## Vendor documentation" in text
+
+
+def test_sources_has_an_anchor_per_claim(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    text = (vault / "06-Sources" / "Sources.md").read_text()
+    assert "### C001" in text
+    assert "### C002" in text
+
+
+def test_sources_shows_url_and_quote(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    text = (vault / "06-Sources" / "Sources.md").read_text()
+    assert fx.URL_A in text
+    assert "A maximum of 10 tools" in text
+
+
+# --- reliability notes --------------------------------------------------
+
+def test_reliability_section_is_present_even_when_clean(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    assert "Notes on source reliability" in (vault / "06-Sources" / "Sources.md").read_text()
+
+
+def test_contradicted_claim_appears_in_reliability_notes(tmp_path):
+    verdicts = [dict(v) for v in fx.VERDICTS_OK]
+    verdicts[2].update(verdict="CONTRADICTED")
+    verdicts[2].pop("quote", None)
+    ws = fx.make_workspace(tmp_path, verdicts=verdicts, pack=FULL_PACK)
+    text = (build_vault.build(ws) / "06-Sources" / "Sources.md").read_text()
+    assert "C002" in text.split("Notes on source reliability")[1]
+
+
+def test_misleading_caveat_appears_in_reliability_notes(tmp_path):
+    verdicts = [dict(v) for v in fx.VERDICTS_OK]
+    verdicts[2].update(verdict="MISLEADING", caveat="Public preview only, not GA.")
+    ws = fx.make_workspace(tmp_path, verdicts=verdicts, pack=FULL_PACK)
+    text = (build_vault.build(ws) / "06-Sources" / "Sources.md").read_text()
+    assert "Public preview only, not GA." in text
+
+
+def test_disagreeing_validators_appear_in_reliability_notes(tmp_path):
+    verdicts = [dict(v) for v in fx.VERDICTS_OK]
+    verdicts[1].update(verdict="MISLEADING", caveat="Preview in some regions.")
+    ws = fx.make_workspace(tmp_path, verdicts=verdicts, pack=FULL_PACK)
+    text = (build_vault.build(ws) / "06-Sources" / "Sources.md").read_text()
+    section = text.split("Notes on source reliability")[1]
+    assert "C001" in section and "disagree" in section.lower()
+
+
+# --- Research Log -------------------------------------------------------
+
+def test_research_log_reports_verdict_counts(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    text = (vault / "06-Sources" / "Research Log.md").read_text()
+    assert "CONFIRMED" in text and "3" in text
+
+
+def test_research_log_reports_fetch_total(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    assert "Fetches recorded" in (vault / "06-Sources" / "Research Log.md").read_text()
+
+
+# --- ledger export ------------------------------------------------------
+
+def test_ledger_export_is_written(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    assert (vault / "06-Sources" / "ledger-export.jsonl").is_file()
+
+
+def test_ledger_export_merges_verdicts_into_claim_rows(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    rows = [json.loads(l) for l in
+            (vault / "06-Sources" / "ledger-export.jsonl").read_text().splitlines() if l.strip()]
+    by_id = {r["id"]: r for r in rows}
+    assert len(by_id["C001"]["verdicts"]) == 2
+
+
+def test_exported_vault_round_trips_as_a_lane_one_source(tmp_path):
+    """A copied-out vault must be ingestable by a future run."""
+    vault = build_vault.build(make_ws(tmp_path))
+    rows = ingest_context.load_prior_ledger(vault)
+    assert {r["id"] for r in rows} == {"C001", "C002"}
+    from datetime import datetime, timezone
+    carried = ingest_context.carry_forward(rows, datetime.now(timezone.utc))
+    assert [c["origin"]["claim_id"] for c in carried] == ["C001", "C002"]

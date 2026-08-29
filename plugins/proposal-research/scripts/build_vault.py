@@ -8,6 +8,7 @@ last step.
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import sys
@@ -268,6 +269,26 @@ def build(workspace: Path, include_proposal: bool = False) -> Path:
         encoding="utf-8",
     )
 
+    # 06-Sources
+    verdicts: dict[str, list[dict]] = {}
+    for row in read_jsonl(workspace / "verdicts.jsonl"):
+        verdicts.setdefault(row.get("claim_id"), []).append(row)
+    fetches = read_jsonl(workspace / "fetch-log.jsonl")
+    gaps_path = workspace / "gaps.md"
+    gaps = gaps_path.read_text(encoding="utf-8") if gaps_path.is_file() else ""
+
+    (vault / "06-Sources" / "Sources.md").write_text(
+        render_note("Sources", ["sources", "proposal-research"],
+                    render_sources(claims, verdicts)),
+        encoding="utf-8",
+    )
+    (vault / "06-Sources" / "Research Log.md").write_text(
+        render_note("Research Log", ["log", "proposal-research"],
+                    render_research_log(claims, verdicts, fetches, gaps)),
+        encoding="utf-8",
+    )
+    write_ledger_export(vault, claims, verdicts)
+
     return vault
 
 
@@ -289,3 +310,123 @@ def _render_brief(sections: dict, linked_titles: dict, claims: dict,
     lines += ["", "## Quick facts", "", "| Item | Value |", "|---|---|",
               f"| Claims in ledger | {len(claims)} |"]
     return render_note("Proposal Brief", ["moc", "proposal-research"], "\n".join(lines))
+
+
+SOURCE_GROUPS = [
+    ("vendor_doc", "Vendor documentation"),
+    ("regulator", "Regulator and official guidance"),
+    ("analyst", "Analyst and research firms"),
+    ("blog", "Blogs and articles"),
+    ("forum", "Forums and community"),
+    ("internal", "Internal notes (unverified)"),
+]
+
+
+def render_sources(claims: dict, verdicts: dict) -> str:
+    lines: list[str] = []
+    grouped: dict[str, list[dict]] = {}
+    for claim in claims.values():
+        grouped.setdefault(claim.get("source_type", "unknown"), []).append(claim)
+
+    for source_type, label in SOURCE_GROUPS:
+        rows = sorted(grouped.get(source_type, []), key=lambda c: c["id"])
+        if not rows:
+            continue
+        lines += [f"## {label}", ""]
+        for claim in rows:
+            rulings = verdicts.get(claim["id"], [])
+            verdict_summary = ", ".join(r.get("verdict", "?") for r in rulings) or "no verdict"
+            lines += [
+                f"### {claim['id']}",
+                "",
+                f"**Claim.** {claim.get('claim', '')}",
+                "",
+                f"**Source.** {claim.get('url') or '_internal note, no URL_'}",
+                "",
+                f"> {claim.get('quote', '')}",
+                "",
+                f"*Verdict:* {verdict_summary} · *Retrieved:* {claim.get('fetched_at', 'unknown')}",
+                "",
+            ]
+
+    lines += render_reliability_notes(claims, verdicts).splitlines()
+    return "\n".join(lines)
+
+
+def render_reliability_notes(claims: dict, verdicts: dict) -> str:
+    """Derived from the verdicts, not noticed by hand.
+
+    The pipeline had to record each disagreement in order to rule on a claim, so
+    the conflicts fall out for free.
+    """
+    lines = ["## Notes on source reliability", ""]
+    entries: list[str] = []
+
+    for claim_id, rulings in sorted(verdicts.items()):
+        claim = claims.get(claim_id)
+        if claim is None:
+            continue
+        seen = {r.get("verdict") for r in rulings}
+        url = claim.get("url") or "internal note"
+
+        if "CONTRADICTED" in seen:
+            entries.append(
+                f"- **{claim_id} — contradicted.** The cited page does not support this "
+                f"claim: {url}. Excluded from the pack body."
+            )
+        for ruling in rulings:
+            if ruling.get("verdict") == "MISLEADING" and ruling.get("caveat"):
+                entries.append(
+                    f"- **{claim_id} — misleading without its caveat.** {ruling['caveat']} "
+                    f"Source: {url}"
+                )
+        if len(seen) > 1:
+            entries.append(
+                f"- **{claim_id} — validators disagree.** Rulings were "
+                f"{', '.join(sorted(v for v in seen if v))}. Treat with care and re-check "
+                f"before quoting to a client."
+            )
+
+    if entries:
+        lines += entries
+    else:
+        lines.append("- No contradictions, caveats, or validator disagreements were recorded.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_research_log(claims: dict, verdicts: dict, fetches: list, gaps: str) -> str:
+    verdict_counts: dict[str, int] = {}
+    for rulings in verdicts.values():
+        for ruling in rulings:
+            key = ruling.get("verdict", "unknown")
+            verdict_counts[key] = verdict_counts.get(key, 0) + 1
+
+    agents = {f.get("agent_id") for f in fetches if f.get("agent_id")}
+
+    lines = [
+        "## Totals",
+        "",
+        f"- Claims in ledger: {len(claims)}",
+        f"- Fetches recorded: {len(fetches)}",
+        f"- Distinct agents that fetched: {len(agents)}",
+        "",
+        "## Verdicts",
+        "",
+    ]
+    lines += [f"- {k}: {v}" for k, v in sorted(verdict_counts.items())] or ["- none"]
+    lines += ["", "## Gap rounds", "", gaps.strip() or "_No gap rounds recorded._", ""]
+    return "\n".join(lines)
+
+
+def write_ledger_export(vault: Path, claims: dict, verdicts: dict) -> Path:
+    """Self-sufficient export so a copied-out vault can seed a future run."""
+    path = vault / "06-Sources" / "ledger-export.jsonl"
+    path.write_text(
+        "".join(
+            json.dumps({**claim, "verdicts": verdicts.get(claim_id, [])}, ensure_ascii=False) + "\n"
+            for claim_id, claim in sorted(claims.items())
+        ),
+        encoding="utf-8",
+    )
+    return path
