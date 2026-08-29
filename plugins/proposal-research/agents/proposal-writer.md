@@ -33,14 +33,20 @@ brief from the orchestrator.
 - Every factual claim carries its id: `Copilot Studio caps MCP tools at 10 per server [C012].`
 - **Bullets and table rows are factual claims too.** The gate checks each list item and
   each table row exactly as it checks a paragraph.
-- **"Effort and phasing" and "What we need from you" will fail the gate unless you mark
-  them.** Both are long prose that states no external fact, so put
-  `<!-- no-citation: reason -->` on the line above the block, with no blank line between —
-  for example `<!-- no-citation: effort estimate, not a finding -->`. The marker exempts
-  the whole block it sits on, so one marker covers a whole list. The gate re-runs over
-  your draft with the same checks it ran over the pack, and it reports every marker, so
-  the exemption stays visible rather than silent. Use it only where the text genuinely
-  asserts no external fact.
+- **Four of your own mandated sections will fail the gate unless you mark them:**
+  "The problem we are solving", "What we need from you", "Effort and phasing", and
+  "Open questions". Each is prose that states no external fact — client framing, asks,
+  estimates, and things nobody has settled yet.
+- **One marker per block, not one per section.** Put `<!-- no-citation: reason -->` on the
+  line directly above a block, with no blank line between — for example
+  `<!-- no-citation: effort estimate, not a finding -->`. A "block" is one run of text
+  separated by blank lines, so a paragraph is a block, a whole list is a block, and a whole
+  table is a block. A section is usually several blocks, and **one marker at the top of a
+  section does not cover the rest of it** — that is the mistake that fails a correctly
+  structured draft. Mark every block that needs it.
+- The gate re-runs over your draft with the same checks it ran over the pack, and it reports
+  every marker, so the exemption stays visible rather than silent. Use it only where the text
+  genuinely asserts no external fact.
 - You may only cite ids that already appear in the approved pack. The gate re-runs over
   your draft with the same checks.
 - Where the pack marked a claim low confidence or attached a caveat, that caveat must

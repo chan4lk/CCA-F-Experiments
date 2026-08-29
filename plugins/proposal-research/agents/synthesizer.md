@@ -50,8 +50,10 @@ The vault builder parses these exact H2 headings. Emit all of them.
 - A paragraph, list or table that states no external fact — framing, a table of contents,
   comparison of things already cited, open questions that are by definition unevidenced —
   may carry `<!-- no-citation: reason -->` on the line above, with no blank line between.
-  The marker exempts the whole block it sits on, so one marker covers a whole list. Use it
-  sparingly; the gate reports every one.
+  **One marker per block, not one per section.** A block is one run of text separated by
+  blank lines, so a paragraph is a block, a whole list is a block, and a whole table is a
+  block. A section is usually several blocks, and one marker at the top of a section does
+  not cover the rest of it. Use it sparingly; the gate reports every one.
 - Never cite a claim id that is not in `claims.jsonl`.
 
 ## Rules

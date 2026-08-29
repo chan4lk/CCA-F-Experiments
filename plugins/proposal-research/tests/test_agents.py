@@ -108,3 +108,42 @@ def test_both_pack_writers_are_told_bullets_and_tables_are_checked():
     for name in ("synthesizer", "proposal-writer"):
         text = (AGENTS / f"{name}.md").read_text(encoding="utf-8").lower()
         assert "bullets and table rows" in text, name
+
+
+# --- marker guidance -----------------------------------------------------
+
+MARKER_SECTIONS = [
+    "The problem we are solving",
+    "What we need from you",
+    "Effort and phasing",
+    "Open questions",
+]
+
+
+def test_proposal_writer_names_every_section_that_needs_a_marker():
+    """A proposal written to this agent's own structure must pass the gate.
+
+    The final review wrote one to the mandated structure, marked exactly the
+    sections the file named, and got six FAILs: two mandated sections were
+    never named, and the marker was applied per section when it is per block.
+    """
+    text = (AGENTS / "proposal-writer.md").read_text(encoding="utf-8")
+    # Scoped to the Citation rules section: every section name also appears in
+    # the mandated-structure block above it, so a whole-file search would pass
+    # trivially and could never fail.
+    rules = text.split("## Citation rules", 1)[1]
+    missing = [s for s in MARKER_SECTIONS if s not in rules]
+    assert missing == [], f"sections that need a marker but are not named in Citation rules: {missing}"
+
+
+def test_proposal_writer_states_the_marker_is_per_block():
+    """One marker per section is the mistake the guidance must prevent."""
+    text = (AGENTS / "proposal-writer.md").read_text(encoding="utf-8").lower()
+    assert "one marker per block" in text
+    assert "not one per section" in text
+
+
+def test_synthesizer_marker_guidance_agrees_with_the_writer():
+    """Both agents write packs the same gate reads; the rule cannot differ."""
+    text = (AGENTS / "synthesizer.md").read_text(encoding="utf-8").lower()
+    assert "one marker per block" in text
