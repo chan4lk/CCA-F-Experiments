@@ -687,3 +687,50 @@ def test_exported_vault_round_trips_as_a_lane_one_source(tmp_path):
     from datetime import datetime, timezone
     carried = ingest_context.carry_forward(rows, datetime.now(timezone.utc))
     assert [c["origin"]["claim_id"] for c in carried] == ["C001", "C002"]
+
+
+# --- Review fixes: verdict rows missing claim_id, deterministic verdict order ---
+
+def test_verdict_row_with_no_claim_id_does_not_crash_the_build(tmp_path):
+    """FINDING 1 (review): a malformed verdicts.jsonl row must not take down the build."""
+    verdicts = [dict(v) for v in fx.VERDICTS_OK]
+    orphan = {"verdict": "CONFIRMED", "validator_agent_id": "orphan-validator",
+              "validator_model": "haiku", "quote": "Orphan quote, no claim_id.",
+              "ruled_at": "2026-08-29T09:53:00Z"}
+    verdicts.append(orphan)
+    ws = fx.make_workspace(tmp_path, verdicts=verdicts, pack=FULL_PACK)
+
+    vault = build_vault.build(ws)  # must not raise
+
+    sources_text = (vault / "06-Sources" / "Sources.md").read_text()
+    log_text = (vault / "06-Sources" / "Research Log.md").read_text()
+    export_text = (vault / "06-Sources" / "ledger-export.jsonl").read_text()
+    assert "orphan-validator" not in sources_text
+    assert "orphan-validator" not in log_text
+    assert "orphan-validator" not in export_text
+
+
+def test_verdict_order_in_sources_is_deterministic_regardless_of_input_order(tmp_path):
+    """FINDING 2 (review): verdict display order must not depend on validator dispatch order."""
+    v_a = {"claim_id": "C001", "verdict": "CONFIRMED", "validator_agent_id": "val-h1",
+           "validator_model": "haiku",
+           "quote": "A maximum of 10 tools per MCP server connection is supported.",
+           "ruled_at": "2026-08-29T09:50:00Z"}
+    v_b = {"claim_id": "C001", "verdict": "MISLEADING", "validator_agent_id": "val-s1",
+           "validator_model": "sonnet",
+           "quote": "A maximum of 10 tools per MCP server connection is supported.",
+           "caveat": "Only true for the default connector.",
+           "ruled_at": "2026-08-29T09:51:00Z"}
+    v_c002 = dict(fx.VERDICTS_OK[2])
+
+    forward = [v_a, v_b, v_c002]
+    reversed_order = [v_b, v_a, v_c002]
+
+    ws_forward = fx.make_workspace(tmp_path / "forward", verdicts=forward, pack=FULL_PACK)
+    ws_reversed = fx.make_workspace(tmp_path / "reversed", verdicts=reversed_order, pack=FULL_PACK)
+
+    text_forward = (build_vault.build(ws_forward) / "06-Sources" / "Sources.md").read_text()
+    text_reversed = (build_vault.build(ws_reversed) / "06-Sources" / "Sources.md").read_text()
+
+    assert text_forward == text_reversed
+    assert "CONFIRMED, MISLEADING" in text_forward

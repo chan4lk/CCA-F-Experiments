@@ -272,7 +272,9 @@ def build(workspace: Path, include_proposal: bool = False) -> Path:
     # 06-Sources
     verdicts: dict[str, list[dict]] = {}
     for row in read_jsonl(workspace / "verdicts.jsonl"):
-        verdicts.setdefault(row.get("claim_id"), []).append(row)
+        claim_id = row.get("claim_id")
+        if claim_id:
+            verdicts.setdefault(claim_id, []).append(row)
     fetches = read_jsonl(workspace / "fetch-log.jsonl")
     gaps_path = workspace / "gaps.md"
     gaps = gaps_path.read_text(encoding="utf-8") if gaps_path.is_file() else ""
@@ -322,6 +324,16 @@ SOURCE_GROUPS = [
 ]
 
 
+def _sorted_rulings(rulings: list[dict]) -> list[dict]:
+    """Stable per-claim ordering, independent of validator dispatch order.
+
+    Validator agents are dispatched independently, so the append order of rows
+    in verdicts.jsonl is not stable across two logically identical runs.
+    Sorting on (ruled_at, validator_agent_id) gives deterministic output.
+    """
+    return sorted(rulings, key=lambda r: (r.get("ruled_at") or "", r.get("validator_agent_id") or ""))
+
+
 def render_sources(claims: dict, verdicts: dict) -> str:
     lines: list[str] = []
     grouped: dict[str, list[dict]] = {}
@@ -334,7 +346,7 @@ def render_sources(claims: dict, verdicts: dict) -> str:
             continue
         lines += [f"## {label}", ""]
         for claim in rows:
-            rulings = verdicts.get(claim["id"], [])
+            rulings = _sorted_rulings(verdicts.get(claim["id"], []))
             verdict_summary = ", ".join(r.get("verdict", "?") for r in rulings) or "no verdict"
             lines += [
                 f"### {claim['id']}",
@@ -366,6 +378,7 @@ def render_reliability_notes(claims: dict, verdicts: dict) -> str:
         claim = claims.get(claim_id)
         if claim is None:
             continue
+        rulings = _sorted_rulings(rulings)
         seen = {r.get("verdict") for r in rulings}
         url = claim.get("url") or "internal note"
 
