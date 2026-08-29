@@ -187,3 +187,78 @@ def test_earlier_lane_wins_on_duplicate_note(tmp_path):
     rows = [json.loads(l) for l in (ws / "internal-claims.jsonl").read_text().splitlines() if l.strip()]
     assert len(rows) == 1
     assert rows[0]["lane"] == 2
+
+
+# --- lane 4 (repo docs/ and README.md) -----------------------------------
+
+def test_main_discovers_lane4_repo_docs_and_readme(tmp_path):
+    ws = tmp_path / "research" / "run-a"
+    ws.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    note(repo / "docs", "architecture.md")
+    (repo / "README.md").write_text("Project readme.", encoding="utf-8")
+
+    rc = ingest_context.main([
+        "--workspace", str(ws), "--question", QUESTION,
+        "--repo", str(repo),
+    ])
+    assert rc == 0
+    rows = [json.loads(l) for l in (ws / "internal-claims.jsonl").read_text().splitlines() if l.strip()]
+    names = {Path(r["source_path"]).name for r in rows}
+    assert names == {"architecture.md", "README.md"}
+    assert all(r["lane"] == 4 for r in rows)
+
+
+def test_earlier_lane_wins_over_lane4_repo(tmp_path):
+    ws = tmp_path / "research" / "run-a"
+    ws.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    docs_dir = repo / "docs"
+    note(docs_dir, "copilot.md")
+
+    rc = ingest_context.main([
+        "--workspace", str(ws), "--question", QUESTION,
+        "--context", str(docs_dir), "--repo", str(repo),
+    ])
+    assert rc == 0
+    rows = [json.loads(l) for l in (ws / "internal-claims.jsonl").read_text().splitlines() if l.strip()]
+    assert len(rows) == 1
+    assert rows[0]["lane"] == 2
+
+
+def test_main_repo_lane_missing_docs_and_readme_does_not_error(tmp_path):
+    ws = tmp_path / "research" / "run-a"
+    ws.mkdir(parents=True)
+    repo = tmp_path / "empty-repo"
+    repo.mkdir(parents=True)
+
+    rc = ingest_context.main([
+        "--workspace", str(ws), "--question", QUESTION,
+        "--repo", str(repo),
+    ])
+    assert rc == 0
+    rows = [l for l in (ws / "internal-claims.jsonl").read_text().splitlines() if l.strip()]
+    assert rows == []
+
+
+def test_budget_caps_lane4_after_earlier_lanes_partially_consume_it(tmp_path):
+    ws = tmp_path / "research" / "run-a"
+    ws.mkdir(parents=True)
+    ctx_dir = tmp_path / "notes"
+    for i in range(20):
+        note(ctx_dir, f"context-note-{i}.md")
+    repo = tmp_path / "repo"
+    for i in range(10):
+        note(repo / "docs", f"doc-note-{i}.md")
+
+    rc = ingest_context.main([
+        "--workspace", str(ws), "--question", QUESTION,
+        "--context", str(ctx_dir), "--repo", str(repo), "--limit", "25",
+    ])
+    assert rc == 0
+    rows = [json.loads(l) for l in (ws / "internal-claims.jsonl").read_text().splitlines() if l.strip()]
+    assert len(rows) == 25
+    by_lane: dict[int, int] = {}
+    for r in rows:
+        by_lane[r["lane"]] = by_lane.get(r["lane"], 0) + 1
+    assert by_lane == {2: 20, 4: 5}
