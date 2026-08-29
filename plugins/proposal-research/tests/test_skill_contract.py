@@ -30,13 +30,37 @@ def test_skill_documents_every_phase():
         assert phase in text, phase
 
 
+# Each role is dispatched exactly once, in exactly one phase, so scoping the model-pairing
+# check to that phase's own section (rather than searching the whole document with DOTALL)
+# means a mis-pairing actually fails the test instead of being rescued by an unrelated
+# mention of the same model name in a later phase.
+PHASE_FOR_ROLE = {
+    "planner": "Phase 1",
+    "researcher": "Phase 2",
+    "validator": "Phase 3",
+    "gap-hunter": "Phase 4",
+    "synthesizer": "Phase 5",
+    "proposal-writer": "Phase 7",
+}
+
+
+def phase_section(text: str, heading: str) -> str:
+    # \b after the heading stops "Phase 5" from swallowing "Phase 5b", and "Phase 7" from
+    # swallowing "Phase 7b" — both are distinct headings in the document.
+    pattern = re.compile(rf"^## {re.escape(heading)}\b.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+    match = pattern.search(text)
+    assert match, f"could not find a '## {heading}' section"
+    return match.group(0)
+
+
 def test_skill_pins_the_model_for_every_role():
     text = SKILL.read_text()
     for role, model in [("planner", "sonnet"), ("researcher", "sonnet"),
                         ("validator", "haiku"), ("gap-hunter", "opus"),
                         ("synthesizer", "fable"), ("proposal-writer", "fable")]:
-        pattern = rf"{role}.*{model}"
-        assert re.search(pattern, text, re.IGNORECASE | re.DOTALL), f"{role} -> {model}"
+        section = phase_section(text, PHASE_FOR_ROLE[role])
+        pattern = rf"dispatch.*`{role}`.*model `{model}`"
+        assert re.search(pattern, section, re.IGNORECASE | re.DOTALL), f"{role} -> {model}"
 
 
 def test_skill_states_the_human_gate_is_blocking():
