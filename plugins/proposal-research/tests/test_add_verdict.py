@@ -24,6 +24,18 @@ def test_unknown_verdict_is_rejected():
     assert any("verdict" in e for e in errors)
 
 
+def test_null_claim_id_is_rejected():
+    assert any("claim_id" in e for e in add_verdict.validate_verdict(dict(VALID, claim_id=None)))
+
+
+def test_null_verdict_is_rejected():
+    assert any("verdict" in e for e in add_verdict.validate_verdict(dict(VALID, verdict=None)))
+
+
+def test_null_validator_agent_id_is_rejected():
+    assert any("validator_agent_id" in e for e in add_verdict.validate_verdict(dict(VALID, validator_agent_id=None)))
+
+
 def test_confirmed_without_own_quote_is_rejected():
     row = dict(VALID)
     del row["quote"]

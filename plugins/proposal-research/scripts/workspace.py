@@ -5,6 +5,7 @@ Stdlib only: hooks run under bare `python3`, outside any project venv.
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,10 +51,19 @@ def ensure_workspace(root: Path) -> Path:
 
 
 def append_jsonl(path: Path, row: dict) -> None:
+    """Atomically append one row to a JSONL file.
+
+    Uses POSIX O_APPEND to ensure the write is atomic below PIPE_BUF, so concurrent
+    appends from parallel processes never interleave.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    line = json.dumps(row, ensure_ascii=False) + "\n"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.write(fd, line.encode("utf-8"))
+    finally:
+        os.close(fd)
 
 
 def read_jsonl(path: Path) -> list[dict]:

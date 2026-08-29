@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from workspace import CLAIM_ID_RE, VERDICTS, utc_now  # noqa: E402
+from workspace import (  # noqa: E402
+    CLAIM_ID_RE,
+    VERDICTS,
+    append_jsonl,
+    utc_now,
+)
 
 REQUIRED = ("claim_id", "verdict", "validator_agent_id", "validator_model")
 
@@ -26,7 +30,7 @@ def validate_verdict(row: dict) -> list[str]:
     for key in REQUIRED:
         if key not in row:
             errors.append(f"missing required field: {key}")
-        elif isinstance(row[key], str) and not row[key].strip():
+        elif row[key] is None or (isinstance(row[key], str) and not row[key].strip()):
             errors.append(f"empty required field: {key}")
 
     claim_id = row.get("claim_id", "")
@@ -46,15 +50,6 @@ def validate_verdict(row: dict) -> list[str]:
         errors.append("MISLEADING requires a caveat explaining why the claim misleads")
 
     return errors
-
-
-def _atomic_append(path: Path, line: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-    try:
-        os.write(fd, line.encode("utf-8"))
-    finally:
-        os.close(fd)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     row.setdefault("ruled_at", utc_now())
-    _atomic_append(Path(args.workspace) / "verdicts.jsonl", json.dumps(row, ensure_ascii=False) + "\n")
+    append_jsonl(Path(args.workspace) / "verdicts.jsonl", row)
     print(f"OK: recorded {row['verdict']} for {row['claim_id']}")
     return 0
 

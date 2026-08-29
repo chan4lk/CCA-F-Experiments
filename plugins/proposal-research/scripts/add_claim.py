@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from workspace import (  # noqa: E402
     CLAIM_ID_RE,
     SOURCE_TYPES,
     TIERS,
+    append_jsonl,
     read_jsonl,
     utc_now,
 )
@@ -33,7 +33,7 @@ def validate_claim(row: dict, existing_ids: set[str]) -> list[str]:
     for key in REQUIRED:
         if key not in row:
             errors.append(f"missing required field: {key}")
-        elif isinstance(row[key], str) and not row[key].strip():
+        elif row[key] is None or (isinstance(row[key], str) and not row[key].strip()):
             errors.append(f"empty required field: {key}")
 
     claim_id = row.get("id", "")
@@ -66,16 +66,6 @@ def validate_claim(row: dict, existing_ids: set[str]) -> list[str]:
     return errors
 
 
-def _atomic_append(path: Path, line: str) -> None:
-    """Single O_APPEND write of one line — atomic under POSIX below PIPE_BUF."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-    try:
-        os.write(fd, line.encode("utf-8"))
-    finally:
-        os.close(fd)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Append a validated claim to claims.jsonl")
     parser.add_argument("--workspace", required=True, help="research/<slug> directory")
@@ -92,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     ledger = Path(args.workspace) / "claims.jsonl"
-    existing_ids = {r.get("id") for r in read_jsonl(ledger)}
+    existing_ids = {r["id"] for r in read_jsonl(ledger) if r.get("id")}
 
     errors = validate_claim(row, existing_ids)
     if errors:
@@ -102,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     row.setdefault("fetched_at", utc_now())
-    _atomic_append(ledger, json.dumps(row, ensure_ascii=False) + "\n")
+    append_jsonl(ledger, row)
     print(f"OK: appended {row['id']}")
     return 0
 
