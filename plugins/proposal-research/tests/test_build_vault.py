@@ -786,6 +786,47 @@ def test_citation_without_a_sources_anchor_is_reported(tmp_path):
     assert any("C999" in p for p in build_vault.check_links(vault))
 
 
+# --- unsafe titles ------------------------------------------------------
+
+def test_wikilink_uses_the_raw_title_when_it_is_already_safe():
+    assert build_vault.wikilink("MCP tool limits") == "[[MCP tool limits]]"
+
+
+def test_wikilink_targets_the_sanitised_filename_and_shows_the_original():
+    assert build_vault.wikilink("Licensing: seat costs") == \
+        "[[Licensing- seat costs|Licensing: seat costs]]"
+
+
+def test_an_h3_title_with_a_colon_builds_and_links(tmp_path):
+    """I4: note_filename rewrites `:` but the brief linked the RAW title.
+
+    `### Licensing: seat costs` produced
+    `BROKEN LINK: 00-MOC/Proposal Brief.md: unresolved wikilink
+    [[Licensing: seat costs]]`, VAULT: FAIL, exit 1 — on the most common
+    punctuation an LLM will put in a section heading.
+    """
+    pack = FULL_PACK.replace("### Licensing", "### Licensing: seat costs")
+    ws = make_ws(tmp_path, pack=pack)
+    vault = build_vault.build(ws)
+    assert (vault / "03-Constraints" / "Licensing- seat costs.md").is_file()
+    assert build_vault.check_links(vault) == []
+    brief = (vault / "00-MOC" / "Proposal Brief.md").read_text()
+    assert "[[Licensing- seat costs|Licensing: seat costs]]" in brief
+
+
+def test_every_unsafe_character_in_a_title_builds_and_links(tmp_path):
+    pack = FULL_PACK.replace("### Licensing", '### A/B\\C:D*E?F"G<H>I|J')
+    vault = build_vault.build(make_ws(tmp_path, pack=pack))
+    assert build_vault.check_links(vault) == []
+
+
+def test_main_exits_zero_for_an_unsafe_title(tmp_path):
+    """End to end through the CLI, which is where I4 was reproduced."""
+    pack = FULL_PACK.replace("### Licensing", "### Licensing: seat costs")
+    ws = make_ws(tmp_path, pack=pack)
+    assert build_vault.main(["--workspace", str(ws)]) == 0
+
+
 # --- proposal phase -----------------------------------------------------
 
 def test_proposal_note_is_absent_by_default(tmp_path):
