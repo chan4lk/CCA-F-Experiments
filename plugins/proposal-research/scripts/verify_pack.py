@@ -249,3 +249,176 @@ def check_validator_tool_restrictions(ctx: Context) -> list[Finding]:
                 f"(query={row.get('query')!r}); validators must only fetch the cited URL",
             ))
     return findings
+
+
+NO_CITATION_MARKER = "<!-- no-citation:"
+MIN_FACTUAL_WORDS = 12
+
+
+def _body_paragraphs(body: str) -> list[str]:
+    """Prose paragraphs only: no headings, tables, list items, or code blocks."""
+    paragraphs = []
+    in_code = False
+    for block in body.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        if block.startswith("```"):
+            in_code = not block.endswith("```") or block.count("```") % 2 == 1
+            continue
+        if in_code:
+            if "```" in block:
+                in_code = False
+            continue
+        first = block.splitlines()[0].lstrip()
+        if first.startswith(("#", "|", ">", "-", "*", "+")):
+            continue
+        paragraphs.append(block)
+    return paragraphs
+
+
+def check_uncited_prose(ctx: Context) -> list[Finding]:
+    """Check 5: no factual body paragraph lacks a citation.
+
+    A paragraph may opt out with an explicit `<!-- no-citation: reason -->`
+    marker, which keeps the exemption visible and auditable rather than silent.
+    """
+    findings = []
+    for para in _body_paragraphs(ctx.body):
+        if NO_CITATION_MARKER in para:
+            continue
+        if len(para.split()) < MIN_FACTUAL_WORDS:
+            continue
+        if CITATION_RE.search(para):
+            continue
+        preview = " ".join(para.split())[:90]
+        findings.append(Finding(
+            "uncited-prose", FAIL,
+            f"factual paragraph carries no citation: \"{preview}...\"",
+        ))
+    return findings
+
+
+def check_source_mix(ctx: Context) -> list[Finding]:
+    """Check 6: surface material claims resting on weak source types."""
+    findings = []
+    weak = {"blog", "forum"}
+    for claim_id in dict.fromkeys(ctx.body_citations):
+        claim = ctx.claims.get(claim_id)
+        if claim is None:
+            continue
+        if claim.get("tier") == "material" and claim.get("source_type") in weak:
+            findings.append(Finding(
+                "source-mix", WARN,
+                f"{claim_id} is material but rests on a {claim.get('source_type')} source; "
+                f"prefer a first-party page for claims that move the proposal",
+            ))
+    return findings
+
+
+def collect_stats(ctx: Context) -> dict:
+    source_mix: dict[str, int] = {}
+    for claim in ctx.claims.values():
+        key = claim.get("source_type", "unknown")
+        source_mix[key] = source_mix.get(key, 0) + 1
+
+    verdict_counts: dict[str, int] = {}
+    for rulings in ctx.verdicts.values():
+        for ruling in rulings:
+            key = ruling.get("verdict", "unknown")
+            verdict_counts[key] = verdict_counts.get(key, 0) + 1
+
+    return {
+        "claims_total": len(ctx.claims),
+        "claims_cited": len(set(ctx.all_citations)),
+        "source_mix": source_mix,
+        "verdict_counts": verdict_counts,
+        "fetches_total": len(ctx.fetches),
+    }
+
+
+ALL_CHECKS = [
+    check_citations_resolve,
+    check_verdict_admission,
+    check_fetch_provenance,
+    check_validator_blindness,
+    check_validator_tool_restrictions,
+    check_uncited_prose,
+    check_source_mix,
+]
+
+
+def run_checks(ctx: Context) -> list[Finding]:
+    findings: list[Finding] = []
+    for check in ALL_CHECKS:
+        findings.extend(check(ctx))
+    return findings
+
+
+def render_report(findings: list[Finding], stats: dict, passed: bool) -> str:
+    lines = [
+        "# Verify Report",
+        "",
+        f"**GATE: {'PASS' if passed else 'FAIL'}**",
+        "",
+        "## Totals",
+        "",
+        f"- Claims in ledger: {stats.get('claims_total', 0)}",
+        f"- Claims cited in pack: {stats.get('claims_cited', 0)}",
+        f"- Fetches recorded: {stats.get('fetches_total', 0)}",
+        "",
+        "## Verdicts",
+        "",
+    ]
+    verdict_counts = stats.get("verdict_counts") or {}
+    lines += [f"- {k}: {v}" for k, v in sorted(verdict_counts.items())] or ["- none"]
+    lines += ["", "## Source mix", ""]
+    source_mix = stats.get("source_mix") or {}
+    if source_mix:
+        total = sum(source_mix.values()) or 1
+        lines.append("| Source type | Claims | Share |")
+        lines.append("|---|---|---|")
+        for key, count in sorted(source_mix.items(), key=lambda kv: -kv[1]):
+            lines.append(f"| {key} | {count} | {round(100 * count / total)}% |")
+    else:
+        lines.append("- none")
+
+    failures = [f for f in findings if f.severity == FAIL]
+    warnings = [f for f in findings if f.severity == WARN]
+
+    lines += ["", "## Failures", ""]
+    lines += [f"- **[{f.check}]** {f.message}" for f in failures] or ["- none"]
+    lines += ["", "## Warnings", ""]
+    lines += [f"- [{f.check}] {f.message}" for f in warnings] or ["- none"]
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Verify an evidence pack against its ledgers")
+    parser.add_argument("--workspace", required=True, help="research/<slug> directory")
+    parser.add_argument("--pack", default="evidence-pack.md", help="pack filename to verify")
+    args = parser.parse_args(argv)
+
+    workspace = Path(args.workspace)
+    ctx = load_context(workspace, args.pack)
+    findings = run_checks(ctx)
+    stats = collect_stats(ctx)
+    passed = not any(f.severity == FAIL for f in findings)
+
+    stem = "verify-report.md" if args.pack == "evidence-pack.md" else \
+        f"verify-report-{Path(args.pack).stem}.md"
+    (workspace / stem).write_text(render_report(findings, stats, passed), encoding="utf-8")
+
+    for finding in findings:
+        stream = sys.stderr if finding.severity == FAIL else sys.stdout
+        print(f"{finding.severity} [{finding.check}] {finding.message}", file=stream)
+
+    print(f"GATE: {'PASS' if passed else 'FAIL'} — report at {workspace / stem}")
+    return 0 if passed else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
