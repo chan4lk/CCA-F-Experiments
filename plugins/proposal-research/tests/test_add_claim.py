@@ -125,3 +125,53 @@ def test_concurrent_appends_do_not_interleave(tmp_path):
     ids = {r["id"] for r in rows}
     assert len(ids) == 40  # all distinct
     assert ids == {f"C{i:03d}" for i in range(1, 41)}
+
+
+# --- provenance warning at append time (defect 2, found by a real run) ----
+
+def write_fetch_log(tmp_path, urls):
+    (tmp_path / "fetch-log.jsonl").write_text(
+        "".join(json.dumps({"ts": "2026-08-29T09:41:00Z", "tool": "WebFetch",
+                            "url": u, "query": None, "agent_id": "res-1",
+                            "agent_type": "proposal-research:researcher"}) + "\n"
+                for u in urls), encoding="utf-8")
+
+
+def test_claim_with_a_logged_url_warns_about_nothing(tmp_path, capsys):
+    write_fetch_log(tmp_path, [VALID["url"]])
+    assert add_claim.main(["--workspace", str(tmp_path), "--json", json.dumps(VALID)]) == 0
+    assert "PROVENANCE" not in capsys.readouterr().err
+
+
+def test_claim_whose_url_was_never_fetched_warns_immediately(tmp_path, capsys):
+    """A real run lost 17 claims to this, discovered an hour later at the gate.
+
+    The researcher had used curl, which the PostToolUse hook cannot see. The
+    claim is still appended — a WebFetch now makes the provenance appear
+    retroactively — but the researcher is told while still in context.
+    """
+    write_fetch_log(tmp_path, ["https://example.com/something-else"])
+    rc = add_claim.main(["--workspace", str(tmp_path), "--json", json.dumps(VALID)])
+    err = capsys.readouterr().err
+    assert rc == 0, "the claim must still land; this is a warning, not a rejection"
+    assert "PROVENANCE" in err
+    assert "WebFetch" in err
+    assert VALID["url"] in err
+
+
+def test_provenance_warning_ignores_fragment_and_trailing_slash(tmp_path, capsys):
+    write_fetch_log(tmp_path, [VALID["url"] + "/#section"])
+    add_claim.main(["--workspace", str(tmp_path), "--json", json.dumps(VALID)])
+    assert "PROVENANCE" not in capsys.readouterr().err
+
+
+def test_missing_fetch_log_names_the_likely_cause(tmp_path, capsys):
+    """An empty log usually means the run was never registered in .active.json.
+
+    That failure is otherwise silent and total: every claim fails the gate.
+    """
+    rc = add_claim.main(["--workspace", str(tmp_path), "--json", json.dumps(VALID)])
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert "PROVENANCE" in err
+    assert "active.json" in err

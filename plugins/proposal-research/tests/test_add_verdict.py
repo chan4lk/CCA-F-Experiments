@@ -285,3 +285,75 @@ def test_resolve_still_ignores_namespaced_researchers(tmp_path):
     agent_id, err = add_verdict.resolve_validator_agent_id(tmp_path, "https://a.com/x", "C001")
     assert agent_id is None
     assert err
+
+
+# --- batch recording (token optimisation, from the first real run) --------
+
+def batch_file(tmp_path, rows):
+    p = tmp_path / "batch.jsonl"
+    p.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return str(p)
+
+
+def test_batch_records_many_verdicts_in_one_call(tmp_path):
+    """The run spent ~468 orchestrator turns recording ~468 verdicts, each turn
+    re-reading a ~362K-token context. Batching is the single largest saving."""
+    rows = [dict(VALID, claim_id=f"C{i:03d}", validator_agent_id=f"val-{i}") for i in range(1, 21)]
+    rc = add_verdict.main(["--workspace", str(tmp_path), "--batch", batch_file(tmp_path, rows)])
+    assert rc == 0
+    written = [json.loads(l) for l in (tmp_path / "verdicts.jsonl").read_text().splitlines() if l.strip()]
+    assert len(written) == 20
+    assert {r["claim_id"] for r in written} == {f"C{i:03d}" for i in range(1, 21)}
+
+
+def test_batch_rejects_only_the_bad_rows_and_reports_them(tmp_path, capsys):
+    """One malformed row must not discard nineteen good ones."""
+    rows = [dict(VALID, claim_id="C001", validator_agent_id="val-1"),
+            dict(VALID, claim_id="C002", verdict="MAYBE"),
+            dict(VALID, claim_id="C003", validator_agent_id="val-3")]
+    rc = add_verdict.main(["--workspace", str(tmp_path), "--batch", batch_file(tmp_path, rows)])
+    assert rc == 1
+    written = [json.loads(l) for l in (tmp_path / "verdicts.jsonl").read_text().splitlines() if l.strip()]
+    assert {r["claim_id"] for r in written} == {"C001", "C003"}
+    err = capsys.readouterr().err
+    assert "C002" in err and "verdict" in err
+
+
+def test_batch_infers_agent_id_per_row(tmp_path):
+    """Each row may name the URL its validator fetched, so inference still works."""
+    write_fetch_log(tmp_path, [
+        {"tool": "WebFetch", "url": "https://a.com/x", "agent_id": "val-x",
+         "agent_type": "proposal-research:validator"},
+        {"tool": "WebFetch", "url": "https://a.com/y", "agent_id": "val-y",
+         "agent_type": "proposal-research:validator"},
+    ])
+    rows = [
+        {k: v for k, v in dict(VALID, claim_id="C001", _infer_from_url="https://a.com/x").items()
+         if k != "validator_agent_id"},
+        {k: v for k, v in dict(VALID, claim_id="C002", _infer_from_url="https://a.com/y").items()
+         if k != "validator_agent_id"},
+    ]
+    rc = add_verdict.main(["--workspace", str(tmp_path), "--batch", batch_file(tmp_path, rows)])
+    assert rc == 0
+    written = [json.loads(l) for l in (tmp_path / "verdicts.jsonl").read_text().splitlines() if l.strip()]
+    by_claim = {r["claim_id"]: r["validator_agent_id"] for r in written}
+    assert by_claim == {"C001": "val-x", "C002": "val-y"}
+
+
+def test_batch_does_not_write_the_internal_infer_key(tmp_path):
+    """_infer_from_url is an instruction to the CLI, not part of the ledger."""
+    write_fetch_log(tmp_path, [
+        {"tool": "WebFetch", "url": "https://a.com/x", "agent_id": "val-x",
+         "agent_type": "proposal-research:validator"}])
+    row = {k: v for k, v in dict(VALID, claim_id="C001", _infer_from_url="https://a.com/x").items()
+           if k != "validator_agent_id"}
+    add_verdict.main(["--workspace", str(tmp_path), "--batch", batch_file(tmp_path, [row])])
+    written = json.loads((tmp_path / "verdicts.jsonl").read_text().splitlines()[0])
+    assert "_infer_from_url" not in written
+
+
+def test_batch_and_json_are_mutually_exclusive(tmp_path, capsys):
+    rc = add_verdict.main(["--workspace", str(tmp_path), "--json", json.dumps(VALID),
+                           "--batch", batch_file(tmp_path, [VALID])])
+    assert rc == 1
+    assert "one of" in capsys.readouterr().err.lower()

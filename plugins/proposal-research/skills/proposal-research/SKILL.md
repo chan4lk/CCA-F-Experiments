@@ -86,35 +86,41 @@ fresh `fetched_at`, using the same id range discipline.
 For every claim in `claims.jsonl`, dispatch a `validator`, **model `haiku`**, in parallel.
 
 Give the validator **only** `{claim_id, claim, url}`. Never the researcher's quote, never
-their narrative, never the raw_hash. The validator has no Read, no Bash and no WebSearch, so
-it cannot obtain them itself — do not undo that by pasting them into the prompt.
+their narrative, never the raw_hash. The validator holds `Bash` (it must, to read PDFs)
+but a PreToolUse guard blocks it from reaching `research/` or searching — do not undo
+mechanically-enforced blindness by pasting the answer into the prompt.
 
-The validator returns JSON. **Record each verdict immediately after that validator
-returns, before you dispatch the next validator for that claim.** Identity is resolved
-from fetch evidence, and the fetch log is cumulative: once the escalation validator has
-opened the same page, two validators have fetched it and `--infer-agent-from` can no
-longer tell which one is speaking. It refuses rather than guessing, so recording late
-costs you the run. Recording in order keeps inference unambiguous by construction.
+**Record verdicts in batches, not one at a time.** This is the single largest cost lever in
+the skill. The first real run spent roughly 468 orchestrator turns recording 468 verdicts,
+and each of those turns re-read a context averaging 362,000 tokens — about 65% of the
+entire run's token consumption, for work that is identical either way.
 
-```bash
-python3 "$PR/scripts/add_verdict.py" --workspace "$WS" \
-  --json '{"claim_id":"C012","verdict":"CONFIRMED","validator_model":"haiku","quote":"..."}' \
-  --infer-agent-from "<the claim url>"
-```
-
-If it still reports ambiguity — two claims can share a URL, so two validators can be in
-flight on the same page — pass the validator's own id instead:
+**Take each validator's `agentId` from its dispatch result.** You already have it; that is
+what makes batching possible. Write the rows straight to a file — do not echo the JSON back
+into your own context first:
 
 ```bash
-python3 "$PR/scripts/add_verdict.py" --workspace "$WS" --json '{...}' \
-  --validator-agent-id "<that validator's agent id>"
+cat > "$WS/verdict-batch.jsonl" <<'JSONL'
+{"claim_id":"C012","verdict":"CONFIRMED","validator_model":"haiku","validator_agent_id":"<agentId>","quote":"..."}
+{"claim_id":"C013","verdict":"MISLEADING","validator_model":"haiku","validator_agent_id":"<agentId>","quote":"...","caveat":"..."}
+JSONL
+python3 "$PR/scripts/add_verdict.py" --workspace "$WS" --batch "$WS/verdict-batch.jsonl"
 ```
+
+A malformed row is reported and skipped; the rest still land. Fix and re-submit only those.
+
+**Why explicit ids rather than inference here.** `--infer-agent-from` resolves identity from
+the fetch log, and the log is cumulative: once two validators have opened the same page —
+which happens constantly, since several claims cite one document — it cannot tell which one
+is speaking, and refuses rather than guessing. Passing the id you already hold sidesteps
+that entirely and removes any constraint on when you record. Keep `--infer-agent-from` for
+the one-off single-row case where you genuinely do not have the id.
 
 **Escalation:** every `material` claim a haiku validator marked `CONFIRMED` gets a second
-validator, **model `sonnet`**, dispatched only after the haiku verdict is recorded. A
-material claim needs two CONFIRMED rulings from **two different validators running two
-different models** to enter the pack — the gate checks the ids and the models, not just
-the row count, because the same validator ruling twice proves nothing.
+validator, **model `sonnet`**. Dispatch the escalation wave in parallel too and record it as
+its own batch. A material claim needs two CONFIRMED rulings from **two different validators
+running two different models** to enter the pack — the gate checks the ids and the models,
+not just the row count, because the same validator ruling twice proves nothing.
 
 ## Phase 4 — Gap hunt
 
@@ -195,3 +201,30 @@ python3 "$PR/scripts/build_vault.py" --workspace "$WS" --with-proposal --copy-to
   the only independent check in the system.
 - If the gate fails, report the failure honestly. Do not narrate around it, and do not
   present a failed pack as "mostly verified".
+
+## Keeping your own context small
+
+Your context is re-read on every turn you take, so its size multiplies by your turn count.
+In the first real run that product was 172 million tokens — 65% of everything the run
+processed — while all ninety subagents together came to 90 million. **You are the expensive
+one, not the research.** Three habits keep it down:
+
+- **Batch state-changing calls.** Verdicts go in batches (Phase 3). The same applies to any
+  repeated one-line command: prefer one call over twenty.
+- **Never route file content through yourself.** Hand agents a *path*, not a paste. When you
+  need a number out of a ledger, compute it in the shell and read back the number — not the
+  rows:
+
+  ```bash
+  python3 -c "import json,sys; rows=[json.loads(l) for l in open('$WS/claims.jsonl')]; \
+    print(len(rows), 'claims,', sum(1 for r in rows if r['tier']=='material'), 'material')"
+  ```
+
+- **Do not echo agent output back to yourself.** A validator's JSON belongs in the batch
+  file, written directly by the command that records it. Reading it into your context to
+  reformat it costs the whole context again on the next turn, and it is the reformatting
+  that tempts you to paste a quote where it does not belong.
+
+Subagent context is cheap by comparison: it is discarded when the agent finishes. Push work
+outward. If you find yourself holding something only so you can pass it along, pass the path
+instead.

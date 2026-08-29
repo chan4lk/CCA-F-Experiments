@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from workspace import (  # noqa: E402
+    normalize_url,
     CLAIM_ID_RE,
     MAX_QUOTE_WORDS,
     SOURCE_TYPES,
@@ -66,6 +67,39 @@ def validate_claim(row: dict, existing_ids: set[str]) -> list[str]:
     return errors
 
 
+def provenance_warning(workspace: Path, url: str) -> str:
+    """Warn now if nothing has retrieved this URL yet, rather than at the gate.
+
+    The PostToolUse hook only sees WebFetch/WebSearch/MS-Learn. A researcher
+    that reads a page with curl — which is what happens when WebFetch cannot
+    decode a PDF — leaves no trace, and the gate rejects the claim an hour
+    later. A real run lost 17 claims that way.
+
+    This is a warning, not a rejection: the claim still lands, and a WebFetch
+    of the same URL now makes its provenance appear retroactively.
+    """
+    log = Path(workspace) / "fetch-log.jsonl"
+    if not log.is_file() or not log.stat().st_size:
+        return (
+            f"PROVENANCE: nothing has been retrieved in this run yet, so {url} has no "
+            f"provenance and every claim will fail the gate.\n"
+            f"  This usually means the run was never registered — check that "
+            f"research/.active.json maps this session's id to this run's slug, then "
+            f"WebFetch the URL before continuing."
+        )
+    target = normalize_url(url)
+    for row in read_jsonl(log):
+        if normalize_url(row.get("url")) == target:
+            return ""
+    return (
+        f"PROVENANCE: {url} does not appear in fetch-log.jsonl, so this claim will fail "
+        f"the gate's provenance and blindness checks.\n"
+        f"  If you read that page with curl or wget, the hook could not see it. Call "
+        f"WebFetch on the same URL now — the claim has been appended, and the retrieval "
+        f"will attach to it retroactively."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Append a validated claim to claims.jsonl")
     parser.add_argument("--workspace", required=True, help="research/<slug> directory")
@@ -93,6 +127,9 @@ def main(argv: list[str] | None = None) -> int:
 
     row.setdefault("fetched_at", utc_now())
     append_jsonl(ledger, row)
+    warning = provenance_warning(Path(args.workspace), row["url"])
+    if warning:
+        print(warning, file=sys.stderr)
     print(f"OK: appended {row['id']}")
     return 0
 

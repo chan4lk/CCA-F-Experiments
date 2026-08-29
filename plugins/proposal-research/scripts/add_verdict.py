@@ -126,10 +126,67 @@ def resolve_validator_agent_id(workspace: Path, url: str, claim_id: str) -> tupl
     return candidates[0], ""
 
 
+INFER_KEY = "_infer_from_url"
+
+
+def record_one(workspace: Path, row: dict, infer_from: str | None = None,
+               agent_id: str | None = None) -> tuple[bool, str]:
+    """Validate and append one verdict. Returns (ok, message)."""
+    if agent_id:
+        row["validator_agent_id"] = agent_id
+
+    if infer_from:
+        resolved, error = resolve_validator_agent_id(workspace, infer_from, row.get("claim_id"))
+        if error:
+            return False, error
+        row["validator_agent_id"] = resolved
+
+    errors = validate_verdict(row)
+    if errors:
+        return False, "; ".join(errors)
+
+    row.setdefault("ruled_at", utc_now())
+    append_jsonl(workspace / "verdicts.jsonl", row)
+    return True, f"recorded {row['verdict']} for {row['claim_id']}"
+
+
+def run_batch(workspace: Path, batch_path: Path) -> int:
+    """Record many verdicts in one call.
+
+    The first real run spent roughly 468 orchestrator turns recording 468
+    verdicts one at a time, and every one of those turns re-read a context
+    averaging 362,000 tokens — about 65% of the entire run's token cost. The
+    work is identical; only the number of turns changes.
+
+    A malformed row is reported and skipped; the rest still land.
+    """
+    rows = read_jsonl(batch_path)
+    ok = failed = 0
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            print(f"REJECTED row {index}: not a JSON object", file=sys.stderr)
+            failed += 1
+            continue
+        infer_from = row.pop(INFER_KEY, None)
+        claim = row.get("claim_id", f"row {index}")
+        good, message = record_one(workspace, row, infer_from=infer_from)
+        if good:
+            ok += 1
+        else:
+            failed += 1
+            print(f"REJECTED {claim}: {message}", file=sys.stderr)
+
+    print(f"OK: recorded {ok} verdict(s)" + (f", rejected {failed}" if failed else ""))
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Append a validated verdict to verdicts.jsonl")
+    parser = argparse.ArgumentParser(description="Append validated verdicts to verdicts.jsonl")
     parser.add_argument("--workspace", required=True, help="research/<slug> directory")
-    parser.add_argument("--json", required=True, help="verdict row as a JSON object")
+    parser.add_argument("--json", default=None, help="one verdict row as a JSON object")
+    parser.add_argument("--batch", default=None,
+                        help="path to a JSONL file of verdict rows; each row may carry "
+                             "\"_infer_from_url\" to resolve its own validator_agent_id")
     parser.add_argument("--infer-agent-from", default=None,
                         help="resolve validator_agent_id from the fetch log for this URL; "
                              "refuses if more than one validator fetched it")
@@ -137,6 +194,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="state the validator's agent_id explicitly; the unambiguous "
                              "path when several validators fetched the same URL")
     args = parser.parse_args(argv)
+
+    if bool(args.json) == bool(args.batch):
+        print("REJECTED: pass exactly one of --json or --batch", file=sys.stderr)
+        return 1
+
+    if args.batch:
+        return run_batch(Path(args.workspace), Path(args.batch))
 
     if args.infer_agent_from and args.validator_agent_id:
         print(
@@ -154,27 +218,13 @@ def main(argv: list[str] | None = None) -> int:
         print("REJECTED: --json must be a JSON object", file=sys.stderr)
         return 1
 
-    if args.validator_agent_id:
-        row["validator_agent_id"] = args.validator_agent_id
-
-    if args.infer_agent_from:
-        agent_id, error = resolve_validator_agent_id(
-            Path(args.workspace), args.infer_agent_from, row.get("claim_id"))
-        if error:
-            print(f"REJECTED: {error}", file=sys.stderr)
-            return 1
-        row["validator_agent_id"] = agent_id
-
-    errors = validate_verdict(row)
-    if errors:
-        print("REJECTED: verdict not appended. Fix and retry:", file=sys.stderr)
-        for err in errors:
-            print(f"  - {err}", file=sys.stderr)
+    good, message = record_one(
+        Path(args.workspace), row,
+        infer_from=args.infer_agent_from, agent_id=args.validator_agent_id)
+    if not good:
+        print(f"REJECTED: {message}", file=sys.stderr)
         return 1
-
-    row.setdefault("ruled_at", utc_now())
-    append_jsonl(Path(args.workspace) / "verdicts.jsonl", row)
-    print(f"OK: recorded {row['verdict']} for {row['claim_id']}")
+    print(f"OK: {message}")
     return 0
 
 
