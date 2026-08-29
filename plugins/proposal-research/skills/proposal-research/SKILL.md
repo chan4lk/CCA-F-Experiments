@@ -19,20 +19,34 @@ Use AskUserQuestion to establish, in one call:
 3. **Hard constraints** — budget ceiling, timeline, incumbent tech, mandated platform
 4. **Context paths** — any local folders to ingest (optional)
 
-Create the workspace, then register the run so the fetch hook knows where to log:
+Create the workspace, then register the run so the fetch hook knows where to log. Read the
+session id from the `CLAUDE_CODE_SESSION_ID` environment variable — hook events fired by tool
+calls made inside a dispatched subagent still report the *parent* session's id, so
+registering under your own `CLAUDE_CODE_SESSION_ID` is what lets fetches made by researchers
+and validators resolve correctly too. If `CLAUDE_CODE_SESSION_ID` is not set on this host, ask
+the user for a session identifier rather than inventing one.
 
 ```bash
 python3 -c "
-import sys; sys.path.insert(0, '$PR/scripts')
+import os, sys; sys.path.insert(0, '$PR/scripts')
 from pathlib import Path
 import workspace
+session_id = os.environ['CLAUDE_CODE_SESSION_ID']
 workspace.ensure_workspace(Path('$WS'))
-workspace.set_active_run(Path('.'), '<session_id>', '<slug>')
+workspace.set_active_run(Path('.'), session_id, '<slug>')
+assert workspace.get_active_run(Path('.'), session_id) == '<slug>', 'active-run registration mismatch: wrong session_id key'
+print('active run registered:', session_id, '->', '<slug>')
 "
 ```
 
-Take `<session_id>` from your own session. Without this the fetch log stays empty and the
-gate will fail every claim — so confirm `research/.active.json` exists before continuing.
+**If this registration is wrong, the fetch log stays empty and every claim fails the gate.**
+A mismatched `session_id` key means `record_fetch.py`'s `get_active_run` lookup silently
+returns nothing for every fetch call, `fetch-log.jsonl` never receives a single row, and
+Phase 6 then fails every cited claim's `fetch-provenance` and `validator-blindness` checks —
+a silent, total failure of the run that only surfaces an hour later at the gate. Do not settle
+for confirming that `research/.active.json` exists; a file that exists under the wrong key
+proves nothing. The `assert` above is the real check — confirm it did not raise before
+continuing to Phase 0.5.
 
 ## Phase 0.5 — Ingest local context
 
