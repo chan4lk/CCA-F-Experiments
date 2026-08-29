@@ -85,3 +85,31 @@ def read_jsonl(path: Path) -> list[dict]:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def active_runs_path(cwd: Path) -> Path:
+    """Maps session_id -> slug, so hooks can find the run they belong to."""
+    return Path(cwd) / "research" / ".active.json"
+
+
+def _load_active(cwd: Path) -> dict:
+    path = active_runs_path(cwd)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def set_active_run(cwd: Path, session_id: str, slug: str) -> None:
+    path = active_runs_path(cwd)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = _load_active(cwd)
+    data[session_id] = slug
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def get_active_run(cwd: Path, session_id: str) -> str | None:
+    return _load_active(cwd).get(session_id)
