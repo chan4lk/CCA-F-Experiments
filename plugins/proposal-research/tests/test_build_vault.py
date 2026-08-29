@@ -446,3 +446,141 @@ def test_generated_notes_are_marked(tmp_path):
     vault = build_vault.build(make_ws(tmp_path))
     finding_note = (vault / "01-Findings" / "MCP tool limits.md").read_text()
     assert "generated: true" in finding_note
+
+
+# --- Round 2 fixes ---
+
+def test_unterminated_frontmatter_with_generated_marker_survives(tmp_path):
+    """ISSUE 1 (Round 2): A note with unterminated --- and 'generated: true' in body must survive.
+
+    If a user note starts with --- (as a horizontal rule) and contains the text
+    'generated: true' anywhere in the body (not in frontmatter), it should NOT be
+    deleted because it doesn't have proper frontmatter structure.
+    """
+    ws = make_ws(tmp_path)
+
+    # First build
+    vault = build_vault.build(ws)
+
+    # User adds a note with unterminated --- and 'generated: true' in the body
+    # This is NOT a generated note; it's a user note that happens to contain that text
+    malformed_note_path = vault / "01-Findings" / "User Notes.md"
+    malformed_note_path.write_text(
+        "---\nThis is a horizontal rule separator.\n\ngenerated: true\n\nBut there's no closing --- so it's not real frontmatter!\n",
+        encoding="utf-8"
+    )
+
+    # Second build
+    vault = build_vault.build(ws)
+
+    # The malformed note should survive because the frontmatter is unterminated
+    assert malformed_note_path.is_file()
+    assert "This is a horizontal rule separator" in malformed_note_path.read_text()
+
+
+def test_title_d_builds_successfully(tmp_path):
+    """ISSUE 2 (Round 2): A title of 'd' should be accepted, not rejected as empty.
+
+    The original code used rstrip(".md") which is a character set, not a suffix.
+    This caused "d.md".rstrip(".md") to return "" incorrectly. The fix uses
+    removesuffix(".md") which properly removes only the suffix.
+    """
+    # Test the filename generation directly
+    filename = build_vault.note_filename("d")
+    assert filename == "d.md"
+    assert filename.removesuffix(".md") == "d"  # Proper suffix removal
+
+    # Test a pack with a title of "d"
+    pack = """# Evidence Pack
+
+## Summary
+
+Test.
+
+## Recommendation
+
+Test.
+
+## Findings
+
+### d
+
+Single letter title 'd' should be accepted.
+
+## Options
+
+### Option
+
+Test.
+
+## Constraints
+
+### Constraint
+
+Test.
+
+## Open Questions
+
+None.
+
+## Unverified & excluded
+
+None.
+"""
+    ws = make_ws(tmp_path, pack=pack)
+    vault = build_vault.build(ws)
+
+    # The note should be created successfully
+    note_path = vault / "01-Findings" / "d.md"
+    assert note_path.is_file()
+    assert "Single letter title" in note_path.read_text()
+
+
+def test_title_md_builds_successfully(tmp_path):
+    """Test that 'md' is also accepted as a valid title."""
+    filename = build_vault.note_filename("md")
+    assert filename == "md.md"
+    assert filename.removesuffix(".md") == "md"  # Proper suffix removal
+
+    pack = """# Evidence Pack
+
+## Summary
+
+Test.
+
+## Recommendation
+
+Test.
+
+## Findings
+
+### md
+
+Markdown file format abbreviation should be accepted.
+
+## Options
+
+### Option
+
+Test.
+
+## Constraints
+
+### Constraint
+
+Test.
+
+## Open Questions
+
+None.
+
+## Unverified & excluded
+
+None.
+"""
+    ws = make_ws(tmp_path, pack=pack)
+    vault = build_vault.build(ws)
+
+    note_path = vault / "01-Findings" / "md.md"
+    assert note_path.is_file()
+    assert "Markdown file format" in note_path.read_text()

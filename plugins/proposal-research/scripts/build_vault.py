@@ -124,19 +124,39 @@ def copy_obsidian_config(vault: Path) -> None:
 
 
 def _is_generated_note(note_path: Path) -> bool:
-    """Check if a note has the 'generated: true' marker in frontmatter."""
+    """Check if a note has the 'generated: true' marker in properly terminated frontmatter.
+
+    Only deletes notes with a well-formed frontmatter block that explicitly contains
+    the generated marker. If the frontmatter is malformed, unterminated, or absent,
+    treat the note as NOT generated and leave it alone (fail toward preservation).
+    """
     try:
         content = note_path.read_text(encoding="utf-8")
-        if content.startswith("---"):
-            lines = content.split("\n")
-            for line in lines[1:]:
-                if line.startswith("---"):
-                    # End of frontmatter
-                    break
-                if line.strip() == "generated: true":
-                    return True
+        lines = content.split("\n")
+
+        # Must start with --- on its own line
+        if not lines or lines[0] != "---":
+            return False
+
+        # Find the closing --- line
+        closing_fence_idx = None
+        for i in range(1, len(lines)):
+            if lines[i] == "---":
+                closing_fence_idx = i
+                break
+
+        # If no closing fence found, treat as not generated
+        if closing_fence_idx is None:
+            return False
+
+        # Only check lines strictly between the opening and closing ---
+        for line in lines[1:closing_fence_idx]:
+            if line.strip() == "generated: true":
+                return True
+
         return False
     except Exception:
+        # If we cannot parse the file, treat as NOT generated
         return False
 
 
@@ -183,8 +203,8 @@ def build(workspace: Path, include_proposal: bool = False) -> Path:
             preamble_title = f"{heading} overview"
             preamble_filename = note_filename(preamble_title)
 
-            # Check for empty filename
-            if not preamble_filename.rstrip(".md"):
+            # Check for empty filename (must have content before the .md extension)
+            if not preamble_filename.removesuffix(".md"):
                 raise ValueError(f"Title '{preamble_title}' sanitizes to an empty filename")
 
             # Check for collision
@@ -205,8 +225,8 @@ def build(workspace: Path, include_proposal: bool = False) -> Path:
         for title, body in subsections:
             filename = note_filename(title)
 
-            # Check for empty filename
-            if not filename.rstrip(".md"):
+            # Check for empty filename (must have content before the .md extension)
+            if not filename.removesuffix(".md"):
                 raise ValueError(f"Title '{title}' sanitizes to an empty filename")
 
             # Check for collision
