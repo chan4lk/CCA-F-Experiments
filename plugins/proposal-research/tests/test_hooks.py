@@ -167,6 +167,30 @@ def test_ledger_lint_malformed_payload_exits_zero(tmp_path):
     assert result.returncode == 0
 
 
+def test_ledger_lint_null_payload_exits_zero(tmp_path):
+    result = subprocess.run(
+        [sys.executable, str(LEDGER_LINT)],
+        input="null", capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+
+
+def test_ledger_lint_array_payload_exits_zero(tmp_path):
+    result = subprocess.run(
+        [sys.executable, str(LEDGER_LINT)],
+        input="[]", capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+
+
+def test_ledger_lint_string_payload_exits_zero(tmp_path):
+    result = subprocess.run(
+        [sys.executable, str(LEDGER_LINT)],
+        input='"hello"', capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+
+
 # --- hooks.json ---------------------------------------------------------
 
 def test_hooks_json_registers_both_hooks():
