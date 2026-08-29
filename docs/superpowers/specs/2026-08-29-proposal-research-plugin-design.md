@@ -35,7 +35,8 @@ the mechanism; file contracts, tool restrictions, and a blocking gate are.
 - Not a replacement for `agent-accelerator:research-studio` (company/person -> PRD set).
   This plugin's deliverable is an evidence pack and a proposal, not PRDs.
 - No Perplexity/Grok dependency in v1. Baseline web tools plus Microsoft Learn only.
-- No local vault/repo ingestion in v1.
+- Does not write into the user's existing `second-brain` vault. Each run emits its own
+  **isolated, self-contained Obsidian vault**.
 - Caveman integration deferred (see Deferred, below).
 
 ## Decisions
@@ -46,7 +47,9 @@ the mechanism; file contracts, tool restrictions, and a blocking gate are.
 | Deliverable | Evidence pack + proposal, two gates | The proposal cannot inherit unvetted claims |
 | Validation bar | Tiered — hard-verify material claims | Best rigour/cost balance; context claims pass flagged |
 | Coverage strategy | Generic decomposition + dedicated gap-hunter | Adaptive; avoids the fixed blind spots of pre-scripted playbooks |
-| Sources | WebSearch, WebFetch, `microsoft_docs_mcp` | First-party vendor docs beat blogs for material claims |
+| Sources | WebSearch, WebFetch, `microsoft_docs_mcp`, local ingestion | First-party vendor docs beat blogs for material claims |
+| Local context | Four ingest lanes, precedence-ordered | Prior runs compound; internal notes steer without becoming evidence |
+| Output format | Generated isolated Obsidian vault per run | Findings are navigable in Obsidian; no coupling to an existing vault |
 | Enforcement | Claim ledger + hooks + blocking verify script | Approach A + C |
 | Token strategy | Headroom MCP + model tiering | Caveman deferred — not installed on this machine |
 
@@ -58,16 +61,19 @@ the mechanism; file contracts, tool restrictions, and a blocking gate are.
 /proposal-research:research "<proposal question>"
    |
  0 Intake .......... orchestrator asks: client, audience, hard constraints, incumbent tech
+0.5 ingest_context.py  four lanes -> internal-claims.jsonl + carried-forward claims
  1 planner ......... no web tools -> plan.md: self-contained sub-questions, tier-tagged
  2 researcher xN || . WebSearch/WebFetch/MS-Learn -> APPEND rows to claims.jsonl
  3 validator  xN || . BLIND re-fetch -> verdicts.jsonl
  4 gap-hunter ...... reads confirmed set -> gaps.md -> loop to 2 (max 2 rounds)
  5 synthesizer ..... no web tools -> evidence-pack.md, every fact carries [C012]
  6 verify_pack.py .. HARD GATE — non-zero exit blocks progress
+5b build_vault.py . deterministic — emits research/<slug>/vault/ (openable in Obsidian)
    |
- == HUMAN GATE — review evidence-pack.md + verify-report.md, approve or correct ==
+ == HUMAN GATE — review the vault (or evidence-pack.md + verify-report.md) ==
    |
- 7 proposal-writer . no web tools, approved pack only -> proposal.md -> gate re-runs
+ 7 proposal-writer . no web tools, approved pack only -> proposal.md
+ 7b build_vault.py . re-run — adds 05-Proposal/, gate re-runs over the proposal
 ```
 
 ### Agent roster
@@ -208,6 +214,116 @@ Six checks; non-zero exit on any failure.
 
 Output is written to `verify-report.md` beside the pack, so the human gate reads both.
 
+## Local context ingestion
+
+Reference template for all vault work: `/Users/chandima/Downloads/Claude Architect Exam`
+(numbered folders, light `tags:` frontmatter, MOC entry point, tiered `Sources.md` with an
+explicit source-reliability section).
+
+### Four lanes, precedence-ordered
+
+`ingest_context.py` runs before the planner. Later lanes never override earlier ones on a
+duplicate claim.
+
+| # | Lane | Source | Trust |
+|---|---|---|---|
+| 1 | Prior generated vaults | earlier `research/<slug>/vault/` outputs | **Public, carried forward** |
+| 2 | Per-run paths | `--context <path>` at invoke time | Internal |
+| 3 | Configured proposals vault | one standing path in plugin config | Internal |
+| 4 | Working directory | `docs/`, `README.md` of the cwd repo | Internal |
+
+### Lane 1 is privileged, and materially different
+
+A prior generated vault is not an opaque note pile — it is this plugin's own output, so its
+claims arrive with `url`, `quote`, `source_type`, `verdict`, and `fetched_at` intact. Such a
+claim is **not internal**. It re-enters as a normal public claim requiring only a cheap
+**re-validation** against its stored URL, not a fresh search.
+
+Staleness policy: a carried-forward `CONFIRMED` claim older than 90 days is re-fetched and
+re-ruled before it may be cited; if the page has changed such that the stored quote no longer
+appears, it is demoted to `NOT_FOUND` and surfaced in the reliability notes as a **changed
+source** — which is itself a finding worth telling the reader about.
+
+This is how runs compound: not merely by seeding better questions, but by carrying verified
+evidence forward at a fraction of the cost of rediscovering it.
+
+### Lanes 2-4: the hard rule for internal material
+
+A local note has no URL and cannot be re-fetched, so it can never pass the gate. Rather than
+weaken the gate, internal material occupies a separate lane:
+
+- Ingested claims are `source_type: internal`, `url: null`, verdict `INTERNAL_UNVERIFIED`
+- They are **never admissible as `tier: material`** — they cannot ground a capability, price,
+  limit, or regulation in the proposal
+- Their function is to **seed sub-questions**. Prior knowledge tells the planner what is worth
+  verifying publicly in this domain, which attacks the missed-coverage failure mode directly:
+  a cold planner does not know what matters here, and the notes do
+- A claim may be **promoted**: if a researcher independently finds a public source for it, it
+  re-enters carrying that URL and passes through blind validation like any other claim
+
+Internal knowledge therefore steers the research without ever silently becoming evidence.
+
+### Ingestion budget
+
+Unbounded ingestion would flood the planner. `ingest_context.py` reads titles and frontmatter
+first, ranks by relevance to the proposal question, and pulls bodies for the top N only
+(default 25 notes). Bodies are passed through `headroom_compress` before reaching the planner.
+
+## Vault output
+
+### Structure
+
+Emitted by `build_vault.py` into `research/<slug>/vault/`:
+
+```
+vault/
+├─ .obsidian/                     templated: graph, backlink, properties,
+│                                   outline, tag-pane enabled
+├─ 00-MOC/
+│   ├─ Proposal Brief.md          master note — question, quick-facts table,
+│   │                               wikilinks to every other note
+│   └─ Decision Cheatsheet.md     the synthesized recommendation
+├─ 01-Findings/                   one note per sub-question from plan.md
+├─ 02-Options/                    one note per candidate solution compared
+├─ 03-Constraints/                regulatory, licensing, data-residency, limits
+├─ 04-Risks-and-Gaps/
+│   ├─ Open Questions.md          gap-hunter leftovers after round 2
+│   └─ Unverified Claims.md       the excluded appendix
+├─ 05-Proposal/Draft Proposal.md  written only after the human gate (phase 7b)
+└─ 06-Sources/
+    ├─ Sources.md                 grouped by source_type, with reliability notes
+    └─ Research Log.md            verdict counts, fetch stats, gap rounds
+```
+
+Frontmatter follows the reference vault's light style — `tags:` plus a few typed fields
+(`confidence`, `sources`, `verdict-summary`) — not the heavier `second-brain` schema.
+
+### The builder is a script, not a seventh agent
+
+The mapping from `claims.jsonl` + `verdicts.jsonl` + `evidence-pack.md` to notes is mechanical:
+filing, wikilinking, anchor generation. `fable` writes the prose in phase 5; `build_vault.py`
+does the filing in 5b. A model that files its own citations can misfile them; a script cannot.
+This keeps the provenance guarantee intact through the presentation layer.
+
+### Generated source reliability notes
+
+`06-Sources/Sources.md` groups sources by `source_type` and ends with a
+**"Notes on source reliability"** section generated from every `CONTRADICTED` and `MISLEADING`
+verdict in the run — conflicting figures, preview-vs-GA discrepancies, changed pages, and which
+source should be treated as authoritative.
+
+In the reference vault this section was assembled by hand ("$99 vs $125", "6 vs 12 months —
+treat the official registration page as source of truth"). Here it is derived, because the
+pipeline already had to record each disagreement in order to rule on the claim.
+
+Every `[Cxxx]` in a note links to its anchor in `Sources.md`; findings, options, and constraints
+cross-link with wikilinks so the Obsidian graph view is navigable rather than a hairball.
+
+### Placement
+
+Built in-repo at `research/<slug>/vault/`, beside the raw artifacts. At the end of a run the
+skill offers to copy the vault to a location the user names.
+
 ## Repository layout
 
 ```
@@ -228,11 +344,18 @@ CCAF/
    │   ├─ hooks.json
    │   ├─ record_fetch.py
    │   └─ ledger_lint.py
-   └─ scripts/verify_pack.py
+   ├─ scripts/
+   │   ├─ verify_pack.py       # the gate
+   │   ├─ ingest_context.py    # phase 0.5, four lanes
+   │   └─ build_vault.py       # phase 5b/7b, deterministic
+   └─ templates/vault/
+       ├─ .obsidian/           # core-plugins.json, graph.json, app.json, appearance.json
+       └─ note-templates/      # MOC, finding, option, constraint, sources, log
 ```
 
 Per-run workspace: `research/<slug>/` containing `plan.md`, `claims.jsonl`, `verdicts.jsonl`,
-`gaps.md`, `fetch-log.jsonl`, `evidence-pack.md`, `verify-report.md`, `proposal.md`.
+`internal-claims.jsonl`, `gaps.md`, `fetch-log.jsonl`, `evidence-pack.md`, `verify-report.md`,
+`proposal.md`, and the generated `vault/`.
 
 ## Testing
 
@@ -243,11 +366,19 @@ Per-run workspace: `research/<slug>/` containing `plan.md`, `claims.jsonl`, `ver
   `NOT_FOUND`, never `CONFIRMED`.
 - End-to-end smoke on the ServiceNow / Copilot Studio question: exercises the
   `microsoft_docs_mcp` path and the preview/GA `MISLEADING` case.
+- **Ingestion firewall fixture** — an internal claim asserting a hard capability must never
+  reach the pack as `tier: material`, and must appear in `Unverified Claims.md`.
+- **Carry-forward fixture** — a prior-vault claim with `fetched_at` older than 90 days must
+  trigger re-validation; if the stored quote no longer appears on the page, it must demote to
+  `NOT_FOUND` and surface in the reliability notes as a changed source.
+- **Vault build fixture** — every `[Cxxx]` in every generated note must resolve to an anchor in
+  `Sources.md`, and the built vault must open in Obsidian with no unresolved wikilinks.
 
 ## Deferred
 
 - **Caveman** — recommended internally for token saving but not installed on this machine
   (no binary, no npm global, no plugin, no skill). Deferred until its interface can be read
   directly rather than guessed at.
-- **Perplexity / Grok discovery**, **local vault ingestion**, **playbook checklists** — all
-  considered and consciously left out of v1.
+- **Perplexity / Grok discovery** and **playbook checklists** — considered and consciously left
+  out of v1. Local vault ingestion was originally deferred but is now in scope (see
+  *Local context ingestion*).
