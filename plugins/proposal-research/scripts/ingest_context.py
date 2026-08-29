@@ -50,19 +50,24 @@ def load_prior_ledger(path: Path) -> list[dict]:
 
     verdicts_by_claim: dict[str, list[dict]] = {}
     for verdict in read_jsonl(path / "verdicts.jsonl"):
-        verdicts_by_claim.setdefault(verdict.get("claim_id"), []).append(verdict)
+        claim_id = verdict.get("claim_id")
+        if claim_id:  # Skip verdicts with no claim_id
+            verdicts_by_claim.setdefault(claim_id, []).append(verdict)
 
-    rows = read_jsonl(claims_path)
-    for row in rows:
-        row["verdicts"] = verdicts_by_claim.get(row.get("id"), [])
-        row.setdefault("_slug", path.name)
+    rows = []
+    for row in read_jsonl(claims_path):
+        claim_id = row.get("id")
+        if claim_id:  # Skip claims with no id
+            row["verdicts"] = verdicts_by_claim.get(claim_id, [])
+            row.setdefault("_slug", path.name)
+            rows.append(row)
     return rows
 
 
 def carry_forward(prior: list[dict], now: datetime) -> list[dict]:
     """Keep only claims every validator confirmed. Re-id and mark for re-validation."""
     carried: list[dict] = []
-    seen_urls: set[str] = set()
+    seen: set[tuple[str, str]] = set()
 
     for row in prior:
         if row.get("source_type") == "internal" or not row.get("url"):
@@ -75,9 +80,11 @@ def carry_forward(prior: list[dict], now: datetime) -> list[dict]:
             continue
 
         url_key = row["url"].split("#", 1)[0].rstrip("/")
-        if url_key in seen_urls:
+        claim_text = row.get("claim", "")
+        dedup_key = (url_key, claim_text)
+        if dedup_key in seen:
             continue
-        seen_urls.add(url_key)
+        seen.add(dedup_key)
 
         carried.append({
             "id": f"C{len(carried) + 1:03d}",
