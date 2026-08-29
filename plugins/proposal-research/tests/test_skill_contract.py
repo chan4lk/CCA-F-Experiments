@@ -94,10 +94,19 @@ def test_skill_requires_two_distinct_validators_for_a_material_claim():
     assert "two\ndifferent models" in section or "two different models" in section
 
 
-def test_skill_requires_recording_each_verdict_before_the_next_dispatch():
+def test_skill_pins_validator_identity_without_relying_on_recording_order():
+    """Replaces test_skill_requires_recording_each_verdict_before_the_next_dispatch.
+
+    That ordering constraint existed only because --infer-agent-from reads a
+    cumulative fetch log and cannot tell two validators of one page apart.
+    Batching with the agentId the orchestrator already holds removes the
+    constraint, so the SKILL no longer mandates the order — but it must still
+    pin identity to a specific validator by some means.
+    """
     section = phase_section(SKILL.read_text(), "Phase 3")
-    assert "immediately after that validator" in section
-    assert "--validator-agent-id" in section
+    assert "validator_agent_id" in section, "identity must still be pinned per verdict"
+    assert "--infer-agent-from" in section, "the single-row fallback must still be documented"
+    assert "two different validators" in section, "the escalation rule must survive"
 
 
 def test_skill_builds_the_vault_only_after_the_gate():
@@ -183,3 +192,24 @@ def test_plugin_description_counts_the_hooks_correctly():
         f"hooks.json has {post} PostToolUse hook(s); the description disagrees")
     assert f"{words[pre]} PreToolUse hook" in description, (
         f"hooks.json has {pre} PreToolUse hook(s); the description disagrees")
+
+
+def test_skill_tells_the_orchestrator_to_batch_verdicts():
+    """Batching is the single largest token lever; the SKILL must mandate it."""
+    text = SKILL.read_text(encoding="utf-8")
+    assert "--batch" in text
+    assert "verdict-batch.jsonl" in text
+    assert "not one at a time" in text.lower()
+
+
+def test_skill_explains_why_batching_uses_explicit_agent_ids():
+    """Inference cannot work in a batch — the reason must be stated, not assumed."""
+    text = SKILL.read_text(encoding="utf-8").lower()
+    assert "agentid" in text
+    assert "cumulative" in text
+
+
+def test_skill_has_context_discipline_rules():
+    text = SKILL.read_text(encoding="utf-8")
+    assert "Keeping your own context small" in text
+    assert "path" in text and "not a paste" in text
