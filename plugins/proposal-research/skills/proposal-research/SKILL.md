@@ -85,7 +85,12 @@ Give the validator **only** `{claim_id, claim, url}`. Never the researcher's quo
 their narrative, never the raw_hash. The validator has no Read, no Bash and no WebSearch, so
 it cannot obtain them itself — do not undo that by pasting them into the prompt.
 
-The validator returns JSON. Record it, resolving its identity from fetch evidence:
+The validator returns JSON. **Record each verdict immediately after that validator
+returns, before you dispatch the next validator for that claim.** Identity is resolved
+from fetch evidence, and the fetch log is cumulative: once the escalation validator has
+opened the same page, two validators have fetched it and `--infer-agent-from` can no
+longer tell which one is speaking. It refuses rather than guessing, so recording late
+costs you the run. Recording in order keeps inference unambiguous by construction.
 
 ```bash
 python3 "$PR/scripts/add_verdict.py" --workspace "$WS" \
@@ -93,9 +98,19 @@ python3 "$PR/scripts/add_verdict.py" --workspace "$WS" \
   --infer-agent-from "<the claim url>"
 ```
 
+If it still reports ambiguity — two claims can share a URL, so two validators can be in
+flight on the same page — pass the validator's own id instead:
+
+```bash
+python3 "$PR/scripts/add_verdict.py" --workspace "$WS" --json '{...}' \
+  --validator-agent-id "<that validator's agent id>"
+```
+
 **Escalation:** every `material` claim a haiku validator marked `CONFIRMED` gets a second
-validator, **model `sonnet`**, dispatched identically. Both verdicts are recorded. A
-material claim needs two CONFIRMED rulings to enter the pack.
+validator, **model `sonnet`**, dispatched only after the haiku verdict is recorded. A
+material claim needs two CONFIRMED rulings from **two different validators running two
+different models** to enter the pack — the gate checks the ids and the models, not just
+the row count, because the same validator ruling twice proves nothing.
 
 ## Phase 4 — Gap hunt
 
@@ -130,7 +145,7 @@ pack as trustworthy, until it passes. Typical failures and their real causes:
 |---|---|
 | `fetch-provenance` | The claim's URL was never retrieved — usually a fabricated citation, sometimes a missing `.active.json` |
 | `validator-blindness` | A verdict was recorded for a page its validator never opened |
-| `verdict-admission` | A material claim is missing its sonnet escalation pass |
+| `verdict-admission` | A material claim is missing its sonnet escalation pass, or both its verdicts came from the same validator |
 | `uncited-prose` | The synthesizer asserted something with no claim behind it |
 
 ## HUMAN GATE

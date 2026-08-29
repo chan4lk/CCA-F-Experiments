@@ -70,6 +70,51 @@ def test_material_claim_with_single_verdict_fails_escalation_rule(tmp_path):
     assert any("escalation" in f.message for f in findings)
 
 
+def test_material_claim_with_two_verdicts_from_one_validator_fails(tmp_path):
+    """CRITICAL 2: two rulings by one validator is not an escalation.
+
+    The SKILL's own documented flow produced this — both verdicts were recorded
+    with --infer-agent-from, which returned the LAST validator that fetched the
+    URL, so both rows carried the same id. The gate only counted rows.
+    """
+    verdicts = [dict(v) for v in build.VERDICTS_OK]
+    verdicts[1]["validator_agent_id"] = "val-h1"
+    verdicts[1]["validator_model"] = "haiku"
+    fetches = [f for f in build.FETCHES_OK if f["agent_id"] != "val-s1"]
+    ws = build.make_workspace(tmp_path, verdicts=verdicts, fetches=fetches)
+    ctx = verify_pack.load_context(ws)
+    findings = fails(verify_pack.check_verdict_admission(ctx))
+    assert any("same validator" in f.message for f in findings)
+    assert verify_pack.main(["--workspace", str(ws)]) == 1
+
+
+def test_material_claim_ruled_twice_by_the_same_model_fails(tmp_path):
+    """Two distinct haiku validators are still not an escalation."""
+    verdicts = [dict(v) for v in build.VERDICTS_OK]
+    verdicts[1]["validator_model"] = "haiku"
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, verdicts=verdicts))
+    findings = fails(verify_pack.check_verdict_admission(ctx))
+    assert any("escalation pass is missing" in f.message and "haiku" in f.message
+               for f in findings)
+    assert not any("same validator" in f.message for f in findings)
+
+
+def test_material_claim_missing_both_distinctions_reports_both(tmp_path):
+    verdicts = [dict(v) for v in build.VERDICTS_OK]
+    verdicts[1]["validator_agent_id"] = "val-h1"
+    verdicts[1]["validator_model"] = "haiku"
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, verdicts=verdicts))
+    messages = [f.message for f in fails(verify_pack.check_verdict_admission(ctx))]
+    assert any("same validator" in m for m in messages)
+    assert any("escalation pass is missing" in m for m in messages)
+
+
+def test_context_claim_may_carry_a_single_verdict(tmp_path):
+    """The distinctness rule is material-only; context claims need one pass."""
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path))
+    assert fails(verify_pack.check_verdict_admission(ctx)) == []
+
+
 def test_material_claim_not_confirmed_by_all_validators_fails(tmp_path):
     verdicts = [dict(v) for v in build.VERDICTS_OK]
     verdicts[1]["verdict"] = "MISLEADING"

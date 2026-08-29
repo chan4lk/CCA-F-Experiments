@@ -149,12 +149,30 @@ def check_verdict_admission(ctx: Context) -> list[Finding]:
                     f"{claim_id} is material but carries {len(rulings)} verdict(s); the "
                     f"sonnet escalation pass is missing",
                 ))
-            elif any(v != "CONFIRMED" for v in verdicts):
-                findings.append(Finding(
-                    "verdict-admission", FAIL,
-                    f"{claim_id} is material and must be CONFIRMED by every validator; "
-                    f"got {verdicts}",
-                ))
+            else:
+                agent_ids = {r.get("validator_agent_id") for r in rulings
+                             if r.get("validator_agent_id")}
+                models = {r.get("validator_model") for r in rulings
+                          if r.get("validator_model")}
+                if len(agent_ids) < 2:
+                    findings.append(Finding(
+                        "verdict-admission", FAIL,
+                        f"{claim_id} is material but all {len(rulings)} verdicts come from "
+                        f"the same validator ({sorted(agent_ids) or ['none']}); the same "
+                        f"validator ruling twice is not an escalation",
+                    ))
+                if len(models) < 2:
+                    findings.append(Finding(
+                        "verdict-admission", FAIL,
+                        f"{claim_id} is material but every verdict was ruled by model "
+                        f"{sorted(models) or ['none']}; the sonnet escalation pass is missing",
+                    ))
+                if any(v != "CONFIRMED" for v in verdicts):
+                    findings.append(Finding(
+                        "verdict-admission", FAIL,
+                        f"{claim_id} is material and must be CONFIRMED by every validator; "
+                        f"got {verdicts}",
+                    ))
         elif "NOT_FOUND" in verdicts:
             findings.append(Finding(
                 "verdict-admission", WARN,
