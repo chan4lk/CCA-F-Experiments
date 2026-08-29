@@ -204,27 +204,37 @@ python3 "$PR/scripts/build_vault.py" --workspace "$WS" --with-proposal --copy-to
 
 ## Keeping your own context small
 
-Your context is re-read on every turn you take, so its size multiplies by your turn count.
-In the first real run that product was 172 million tokens — 65% of everything the run
-processed — while all ninety subagents together came to 90 million. **You are the expensive
-one, not the research.** Three habits keep it down:
+**Measured, not guessed.** In the first real run your context grew 107K -> 706K across 488
+turns, and cache reads are turns x context — 172 million tokens, 65% of everything the run
+processed, against 90 million for all ninety subagents combined. **You are the expensive
+part, not the research.**
 
-- **Batch state-changing calls.** Verdicts go in batches (Phase 3). The same applies to any
-  repeated one-line command: prefer one call over twenty.
+Of the ~600K of growth, tool results were only ~104K. **The other ~500K was your own prose.**
+Every sentence you write is re-read on every turn that follows it, so a paragraph written at
+turn 50 is paid for 438 more times.
+
+- **Narrate once per wave, not once per agent.** One line: `wave 3: 12 validators dispatched`,
+  or `wave 3: 11 CONFIRMED, 1 MISLEADING`. Not a per-claim account, not a table, not a recap
+  of what each agent said.
+- **Never restate an agent's output.** It is already in your context once. Rewriting it in
+  your own words doubles it permanently — and the retyping is what tempts you to paste a
+  researcher's quote where it must never go.
+- **No progress summaries between phases.** The ledgers are the state.
 - **Never route file content through yourself.** Hand agents a *path*, not a paste. When you
-  need a number out of a ledger, compute it in the shell and read back the number — not the
-  rows:
+  need a number from a ledger, compute it in the shell and read back the number, not the rows:
 
   ```bash
-  python3 -c "import json,sys; rows=[json.loads(l) for l in open('$WS/claims.jsonl')]; \
+  python3 -c "import json; rows=[json.loads(l) for l in open('$WS/claims.jsonl')]; \
     print(len(rows), 'claims,', sum(1 for r in rows if r['tier']=='material'), 'material')"
   ```
 
-- **Do not echo agent output back to yourself.** A validator's JSON belongs in the batch
-  file, written directly by the command that records it. Reading it into your context to
-  reformat it costs the whole context again on the next turn, and it is the reformatting
-  that tempts you to paste a quote where it does not belong.
+- **Batch state-changing calls.** Verdicts go in batches (Phase 3); so does anything else you
+  would otherwise repeat twenty times.
+- **Think briefly at routine steps.** Save extended reasoning for a gate failure, the gap-round
+  decision, and the human gate — not for dispatching wave 7 of 9.
 
-Subagent context is cheap by comparison: it is discarded when the agent finishes. Push work
-outward. If you find yourself holding something only so you can pass it along, pass the path
-instead.
+A useful check: if your message would still be true with every specific replaced by "N", it is
+bookkeeping. Put it in a file, not in your context.
+
+Subagent context is discarded when the agent finishes, so push work outward. If you are holding
+something only to pass it along, pass the path instead.
