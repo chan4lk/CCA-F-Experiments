@@ -73,12 +73,29 @@ def test_parse_sections_captures_body_text():
 
 def test_split_subsections_splits_on_h3():
     findings = build_vault.parse_sections(FULL_PACK)["Findings"]
-    subs = build_vault.split_subsections(findings)
+    preamble, subs = build_vault.split_subsections(findings)
     assert [t for t, _ in subs] == ["MCP tool limits", "Native agent positioning"]
 
 
 def test_split_subsections_with_no_h3_returns_empty():
-    assert build_vault.split_subsections("Just prose, no headings.\n") == []
+    preamble, subs = build_vault.split_subsections("Just prose, no headings.\n")
+    assert subs == []
+
+
+def test_split_subsections_preserves_preamble():
+    text = """General intro about findings.
+
+### Finding 1
+
+Body of finding 1.
+
+### Finding 2
+
+Body of finding 2."""
+    preamble, subs = build_vault.split_subsections(text)
+    assert "General intro about findings" in preamble
+    assert len(subs) == 2
+    assert [t for t, _ in subs] == ["Finding 1", "Finding 2"]
 
 
 def test_note_filename_is_filesystem_safe():
@@ -90,8 +107,19 @@ def test_render_note_emits_frontmatter_and_title():
     out = build_vault.render_note("My Note", ["finding", "proposal-research"], "Body [C001].")
     assert out.startswith("---\n")
     assert "tags: [finding, proposal-research]" in out
+    assert "generated: true" in out
     assert "# My Note" in out
     assert "Body [C001]." in out
+
+
+def test_render_note_marks_generated_by_default():
+    out = build_vault.render_note("Note", [], "Body")
+    assert "generated: true" in out
+
+
+def test_render_note_respects_generated_false():
+    out = build_vault.render_note("Note", [], "Body", generated=False)
+    assert "generated: true" not in out
 
 
 # --- build --------------------------------------------------------------
@@ -147,3 +175,274 @@ def test_build_rejects_a_pack_missing_required_sections(tmp_path):
         assert "Findings" in str(exc)
     else:
         raise AssertionError("expected ValueError for incomplete pack")
+
+
+# --- Finding 1: Filename collisions ---
+
+def test_build_raises_on_filename_collision(tmp_path):
+    """FINDING 1: Colliding sanitized titles must raise, not silently overwrite."""
+    pack = """# Evidence Pack
+
+## Summary
+
+Test.
+
+## Recommendation
+
+Test.
+
+## Findings
+
+### A/B: limits
+
+First finding.
+
+### A:B/ limits
+
+Second finding (same sanitized filename as first).
+
+## Options
+
+### Option
+
+Test.
+
+## Constraints
+
+### Constraint
+
+Test.
+
+## Open Questions
+
+None.
+
+## Unverified & excluded
+
+None.
+"""
+    ws = make_ws(tmp_path, pack=pack)
+    try:
+        build_vault.build(ws)
+    except ValueError as exc:
+        exc_str = str(exc)
+        assert "collision" in exc_str.lower()
+        assert "01-Findings" in exc_str or "Findings" in exc_str
+    else:
+        raise AssertionError("expected ValueError for filename collision")
+
+
+def test_build_raises_when_preamble_conflicts_with_h3_title(tmp_path):
+    """FINDING 1: Preamble creates 'Findings overview' which must not collide."""
+    # If we have a preamble AND an H3 titled "Findings overview", that's a collision
+    pack = """# Evidence Pack
+
+## Summary
+
+Test.
+
+## Recommendation
+
+Test.
+
+## Findings
+
+General intro that becomes Findings overview.
+
+### Findings overview
+
+But we also have an H3 with the same name!
+
+## Options
+
+### Option
+
+Test.
+
+## Constraints
+
+### Constraint
+
+Test.
+
+## Open Questions
+
+None.
+
+## Unverified & excluded
+
+None.
+"""
+    ws = make_ws(tmp_path, pack=pack)
+    try:
+        build_vault.build(ws)
+    except ValueError as exc:
+        exc_str = str(exc)
+        assert "collision" in exc_str.lower()
+    else:
+        raise AssertionError("expected ValueError for preamble/H3 collision")
+
+
+# --- Finding 2: Code fence tracking ---
+
+def test_parse_sections_ignores_h2_in_code_fence():
+    """FINDING 2: H2 headings inside code fences must not create sections."""
+    pack = """# Evidence Pack
+
+## Summary
+
+This section has a code fence:
+```python
+## This is not a heading
+## Neither is this
+```
+
+Real summary text after fence.
+
+## Recommendation
+
+Test.
+
+## Findings
+
+### Finding
+
+Test.
+
+## Options
+
+### Option
+
+Test.
+
+## Constraints
+
+### Constraint
+
+Test.
+
+## Open Questions
+
+None.
+
+## Unverified & excluded
+
+None.
+"""
+    sections = build_vault.parse_sections(pack)
+    assert "This is not a heading" not in sections
+    assert "Neither is this" not in sections
+    assert "Summary" in sections
+    assert "```python" in sections["Summary"]
+    assert "Real summary text after fence" in sections["Summary"]
+
+
+def test_split_subsections_ignores_h3_in_code_fence():
+    """FINDING 2: H3 headings inside code fences must not create subsections."""
+    text = """Intro text with a fence:
+```
+### fake heading in fence
+```
+More text after fence.
+
+### Real heading
+
+Real body."""
+    preamble, subs = build_vault.split_subsections(text)
+    assert len(subs) == 1
+    assert subs[0][0] == "Real heading"
+    assert "### fake heading in fence" in preamble
+
+
+# --- Finding 3: Preamble preservation ---
+
+def test_build_writes_preamble_as_overview_note(tmp_path):
+    """FINDING 3: Section preamble must be preserved as a <Section> overview note."""
+    pack = """# Evidence Pack
+
+## Summary
+
+Summary text.
+
+## Recommendation
+
+Recommendation text.
+
+## Findings
+
+General intro about findings. This paragraph should be preserved.
+
+### Finding 1
+
+Body of finding 1.
+
+### Finding 2
+
+Body of finding 2.
+
+## Options
+
+### Option 1
+
+Test.
+
+## Constraints
+
+### Constraint 1
+
+Test.
+
+## Open Questions
+
+None.
+
+## Unverified & excluded
+
+None.
+"""
+    ws = make_ws(tmp_path, pack=pack)
+    vault = build_vault.build(ws)
+
+    # Check that Findings overview note exists
+    overview_path = vault / "01-Findings" / "Findings overview.md"
+    assert overview_path.is_file()
+    overview_text = overview_path.read_text()
+    assert "General intro about findings" in overview_text
+
+    # Check that the brief links to the overview
+    brief = (vault / "00-MOC" / "Proposal Brief.md").read_text()
+    assert "[[Findings overview]]" in brief
+
+
+# --- Finding 4: User-authored notes survive ---
+
+def test_build_preserves_user_authored_notes(tmp_path):
+    """FINDING 4: Notes without 'generated: true' must survive rebuilds."""
+    ws = make_ws(tmp_path)
+
+    # First build
+    vault = build_vault.build(ws)
+
+    # User adds a note to the vault (without the generated marker)
+    user_note_path = vault / "01-Findings" / "My Custom Finding.md"
+    user_note_path.write_text(
+        "---\ntags: [custom]\n---\n\n# My Custom Finding\n\nThis is a user note.\n",
+        encoding="utf-8"
+    )
+
+    # Second build
+    vault = build_vault.build(ws)
+
+    # User note should still exist
+    assert user_note_path.is_file()
+    assert "This is a user note" in user_note_path.read_text()
+
+    # Generated notes should still be there too
+    assert (vault / "01-Findings" / "MCP tool limits.md").is_file()
+
+
+def test_generated_notes_are_marked(tmp_path):
+    """Generated notes must have the 'generated: true' marker."""
+    vault = build_vault.build(make_ws(tmp_path))
+    finding_note = (vault / "01-Findings" / "MCP tool limits.md").read_text()
+    assert "generated: true" in finding_note
