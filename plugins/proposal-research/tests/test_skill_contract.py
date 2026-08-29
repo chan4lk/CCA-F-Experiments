@@ -222,3 +222,24 @@ def test_skill_tells_the_orchestrator_its_own_prose_is_the_cost():
     assert "your own prose" in section
     assert "once per wave, not once per agent" in section
     assert "Never restate an agent's output" in section
+
+
+def test_the_two_manifests_declare_the_same_version():
+    """plugin.json and marketplace.json each carry a version and can drift.
+
+    A stale marketplace entry installs the wrong version silently.
+    """
+    import json
+    plugin = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))
+    marketplace = json.loads(
+        (PLUGIN.parents[1] / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+    entry = next(p for p in marketplace["plugins"] if p["name"] == plugin["name"])
+    assert entry["version"] == plugin["version"], (
+        f"marketplace says {entry['version']}, plugin.json says {plugin['version']}")
+
+
+def test_changelog_documents_the_current_version():
+    changelog = (PLUGIN / "CHANGELOG.md").read_text(encoding="utf-8")
+    import json
+    version = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))["version"]
+    assert f"## {version}" in changelog, f"CHANGELOG has no entry for {version}"

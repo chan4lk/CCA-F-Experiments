@@ -9,9 +9,11 @@
     {
       "name": "proposal-research",
       "source": "./plugins/proposal-research",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "description": "Multi-agent web research for product proposals. Emits a cited evidence pack, a draft proposal, and a self-contained Obsidian vault, with every material claim provably traced to a retrieved page.",
-      "author": { "name": "Chandima Ranaweera" },
+      "author": {
+        "name": "Chandima Ranaweera"
+      },
       "license": "MIT"
     }
   ]
