@@ -33,6 +33,22 @@ def test_empty_quote_is_rejected():
     assert any("quote" in e for e in add_claim.validate_claim(row, set()))
 
 
+def test_null_id_is_rejected():
+    assert any("id" in e for e in add_claim.validate_claim(dict(VALID, id=None), set()))
+
+
+def test_null_quote_is_rejected():
+    assert any("quote" in e for e in add_claim.validate_claim(dict(VALID, quote=None), set()))
+
+
+def test_null_url_is_rejected():
+    assert any("url" in e for e in add_claim.validate_claim(dict(VALID, url=None), set()))
+
+
+def test_null_tier_is_rejected():
+    assert any("tier" in e for e in add_claim.validate_claim(dict(VALID, tier=None), set()))
+
+
 def test_quote_over_fifty_words_is_rejected():
     row = dict(VALID, quote=" ".join(["word"] * 51))
     assert any("50 words" in e for e in add_claim.validate_claim(row, set()))
@@ -104,6 +120,8 @@ def test_concurrent_appends_do_not_interleave(tmp_path):
             payloads,
         ))
     lines = [l for l in (tmp_path / "claims.jsonl").read_text().splitlines() if l.strip()]
-    for line in lines:
-        json.loads(line)  # every line must be independently parseable
-    assert len(lines) >= 1
+    rows = [json.loads(line) for line in lines]  # every line must be independently parseable
+    assert len(rows) == 40
+    ids = {r["id"] for r in rows}
+    assert len(ids) == 40  # all distinct
+    assert ids == {f"C{i:03d}" for i in range(1, 41)}
