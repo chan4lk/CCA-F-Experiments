@@ -19,14 +19,28 @@ GUARDED = {
     "verdicts.jsonl": "add_verdict.py",
 }
 
+WORKSPACE_DIR = "research"
+
+
+def is_plugin_ledger(file_path: str) -> bool:
+    """True only for a ledger inside a `research/` workspace.
+
+    This hook ships to the whole machine and fires on every Write and Edit. A
+    basename-only guard made ANY file called claims.jsonl or verdicts.jsonl, in
+    ANY project, permanently unwritable — with an error telling the user to run
+    a CLI belonging to a plugin they were not using.
+    """
+    path = Path(file_path)
+    return path.name in GUARDED and WORKSPACE_DIR in path.parent.parts
+
 
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
         file_path = ((payload.get("tool_input") or {}).get("file_path")) or ""
-        cli = GUARDED.get(Path(file_path).name)
-        if not cli:
+        if not is_plugin_ledger(file_path):
             return 0
+        cli = GUARDED[Path(file_path).name]
 
         plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "${CLAUDE_PLUGIN_ROOT}")
         workspace = Path(file_path).parent

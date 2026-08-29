@@ -159,6 +159,62 @@ def test_internal_claims_ledger_is_not_blocked(tmp_path):
     assert result.returncode == 0
 
 
+def test_a_claims_ledger_outside_a_research_dir_is_not_blocked(tmp_path):
+    """M1: this hook ships to the whole machine and fires on every Write.
+
+    A basename-only guard made any claims.jsonl in any unrelated project
+    permanently unwritable, with an error naming a plugin CLI the user was not
+    using.
+    """
+    result = run_hook(LEDGER_LINT, {
+        "session_id": SESSION, "cwd": str(tmp_path),
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(tmp_path / "some-other-project" / "data" / "claims.jsonl"),
+                       "content": "{}"},
+    })
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
+def test_a_verdicts_ledger_outside_a_research_dir_is_not_blocked(tmp_path):
+    result = run_hook(LEDGER_LINT, {
+        "session_id": SESSION, "cwd": str(tmp_path),
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(tmp_path / "elsewhere" / "verdicts.jsonl"),
+                       "old_string": "a", "new_string": "b"},
+    })
+    assert result.returncode == 0
+
+
+def test_a_ledger_directly_under_research_is_blocked(tmp_path):
+    result = run_hook(LEDGER_LINT, {
+        "session_id": SESSION, "cwd": str(tmp_path),
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(tmp_path / "research" / "claims.jsonl"), "content": "{}"},
+    })
+    assert result.returncode == 2
+
+
+def test_a_ledger_deep_inside_a_research_workspace_is_blocked(tmp_path):
+    result = run_hook(LEDGER_LINT, {
+        "session_id": SESSION, "cwd": str(tmp_path),
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(tmp_path / "research" / "run-a" / "sub" / "claims.jsonl"),
+                       "content": "{}"},
+    })
+    assert result.returncode == 2
+
+
+def test_a_file_named_research_does_not_scope_the_guard(tmp_path):
+    """`research` must be a directory on the path, not the ledger's own name."""
+    result = run_hook(LEDGER_LINT, {
+        "session_id": SESSION, "cwd": str(tmp_path),
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(tmp_path / "notes" / "claims.jsonl"), "content": "{}"},
+    })
+    assert result.returncode == 0
+
+
 def test_ledger_lint_malformed_payload_exits_zero(tmp_path):
     result = subprocess.run(
         [sys.executable, str(LEDGER_LINT)],
