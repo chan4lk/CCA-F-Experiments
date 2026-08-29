@@ -160,3 +160,92 @@ def check_verdict_admission(ctx: Context) -> list[Finding]:
             ))
 
     return findings
+
+
+def normalize_url(url: str | None) -> str:
+    """Compare URLs ignoring fragment and trailing slash."""
+    if not url:
+        return ""
+    return url.split("#", 1)[0].rstrip("/")
+
+
+def _fetched_urls_by_agent(ctx: Context) -> dict[str, set[str]]:
+    by_agent: dict[str, set[str]] = {}
+    for row in ctx.fetches:
+        url = normalize_url(row.get("url"))
+        if not url:
+            continue
+        by_agent.setdefault(row.get("agent_id"), set()).add(url)
+    return by_agent
+
+
+def check_fetch_provenance(ctx: Context) -> list[Finding]:
+    """Check 3: every cited claim's URL was actually retrieved this session.
+
+    A URL in the pack that never appears in fetch-log.jsonl is the signature of
+    a hallucinated citation.
+    """
+    findings = []
+    all_fetched = {
+        normalize_url(r.get("url")) for r in ctx.fetches if normalize_url(r.get("url"))
+    }
+    for claim_id in dict.fromkeys(ctx.all_citations):
+        claim = ctx.claims.get(claim_id)
+        if claim is None:
+            continue
+        url = normalize_url(claim.get("url"))
+        if url and url not in all_fetched:
+            findings.append(Finding(
+                "fetch-provenance", FAIL,
+                f"{claim_id} cites {claim.get('url')} but that page was never retrieved "
+                f"during this run",
+            ))
+    return findings
+
+
+def check_validator_blindness(ctx: Context) -> list[Finding]:
+    """Check 4: each validator that ruled on a body claim fetched that URL itself.
+
+    This is what makes blindness provable. A validator ruling on a page it never
+    opened is either echoing the researcher or inventing a verdict.
+    """
+    findings = []
+    by_agent = _fetched_urls_by_agent(ctx)
+
+    for claim_id in dict.fromkeys(ctx.body_citations):
+        claim = ctx.claims.get(claim_id)
+        if claim is None:
+            continue
+        url = normalize_url(claim.get("url"))
+        if not url:
+            continue
+
+        for ruling in ctx.verdicts.get(claim_id, []):
+            agent_id = ruling.get("validator_agent_id")
+            if not agent_id:
+                findings.append(Finding(
+                    "validator-blindness", FAIL,
+                    f"a verdict on {claim_id} carries no validator_agent_id, so its "
+                    f"independence cannot be proven",
+                ))
+                continue
+            if url not in by_agent.get(agent_id, set()):
+                findings.append(Finding(
+                    "validator-blindness", FAIL,
+                    f"validator {agent_id} ruled {ruling.get('verdict')} on {claim_id} "
+                    f"but never retrieved {claim.get('url')} itself",
+                ))
+    return findings
+
+
+def check_validator_tool_restrictions(ctx: Context) -> list[Finding]:
+    """Validators must not search. Searching means shopping for a friendlier source."""
+    findings = []
+    for row in ctx.fetches:
+        if row.get("agent_type") == "validator" and row.get("tool") == "WebSearch":
+            findings.append(Finding(
+                "validator-tool-restrictions", FAIL,
+                f"validator {row.get('agent_id')} called WebSearch "
+                f"(query={row.get('query')!r}); validators must only fetch the cited URL",
+            ))
+    return findings

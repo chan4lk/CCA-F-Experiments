@@ -143,3 +143,100 @@ Body with no citations.
 """
     ctx = verify_pack.load_context(build.make_workspace(tmp_path, verdicts=[], pack=pack))
     assert fails(verify_pack.check_verdict_admission(ctx)) == []
+
+
+# --- url normalization --------------------------------------------------
+
+def test_normalize_url_strips_fragment_and_trailing_slash():
+    assert verify_pack.normalize_url("https://a.com/x/#frag") == "https://a.com/x"
+    assert verify_pack.normalize_url("https://a.com/x") == "https://a.com/x"
+
+
+def test_normalize_url_handles_none():
+    assert verify_pack.normalize_url(None) == ""
+
+
+# --- check 3: fetch provenance -----------------------------------------
+
+def test_clean_workspace_passes_provenance(tmp_path):
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path))
+    assert fails(verify_pack.check_fetch_provenance(ctx)) == []
+
+
+def test_cited_url_never_fetched_fails(tmp_path):
+    fetches = [f for f in build.FETCHES_OK if f["url"] != build.URL_B]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=fetches))
+    findings = fails(verify_pack.check_fetch_provenance(ctx))
+    assert any("C002" in f.message and "never retrieved" in f.message for f in findings)
+
+
+def test_provenance_matches_despite_trailing_slash(tmp_path):
+    fetches = [dict(f) for f in build.FETCHES_OK]
+    for f in fetches:
+        if f["url"]:
+            f["url"] = f["url"] + "/"
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=fetches))
+    assert fails(verify_pack.check_fetch_provenance(ctx)) == []
+
+
+def test_empty_fetch_log_fails_every_cited_claim(tmp_path):
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=[]))
+    assert len(fails(verify_pack.check_fetch_provenance(ctx))) == 2
+
+
+# --- check 4: validator blindness --------------------------------------
+
+def test_clean_workspace_passes_blindness(tmp_path):
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path))
+    assert fails(verify_pack.check_validator_blindness(ctx)) == []
+
+
+def test_validator_that_never_fetched_the_url_fails(tmp_path):
+    fetches = [f for f in build.FETCHES_OK if f["agent_id"] != "val-s1"]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=fetches))
+    findings = fails(verify_pack.check_validator_blindness(ctx))
+    assert any("val-s1" in f.message and "C001" in f.message for f in findings)
+
+
+def test_validator_that_fetched_a_different_url_fails(tmp_path):
+    fetches = [dict(f) for f in build.FETCHES_OK]
+    for f in fetches:
+        if f["agent_id"] == "val-s1":
+            f["url"] = "https://unrelated.example/other"
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=fetches))
+    assert any("val-s1" in f.message for f in fails(verify_pack.check_validator_blindness(ctx)))
+
+
+def test_verdict_with_no_validator_agent_id_fails(tmp_path):
+    verdicts = [dict(v) for v in build.VERDICTS_OK]
+    verdicts[1].pop("validator_agent_id")
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, verdicts=verdicts))
+    findings = fails(verify_pack.check_validator_blindness(ctx))
+    assert any("no validator_agent_id" in f.message for f in findings)
+
+
+def test_blindness_only_applies_to_body_claims(tmp_path):
+    pack = "# Pack\n\nNo citations here.\n\n## Unverified & excluded\n\n- [C001]\n"
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=[], pack=pack))
+    assert fails(verify_pack.check_validator_blindness(ctx)) == []
+
+
+# --- validator tool restrictions ---------------------------------------
+
+def test_validator_using_websearch_fails(tmp_path):
+    fetches = list(build.FETCHES_OK) + [
+        {"ts": "2026-08-29T09:53:00Z", "tool": "WebSearch", "url": None,
+         "query": "friendlier source", "agent_id": "val-s1", "agent_type": "validator"},
+    ]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=fetches))
+    findings = fails(verify_pack.check_validator_tool_restrictions(ctx))
+    assert any("val-s1" in f.message and "WebSearch" in f.message for f in findings)
+
+
+def test_researcher_using_websearch_is_fine(tmp_path):
+    fetches = list(build.FETCHES_OK) + [
+        {"ts": "2026-08-29T09:53:00Z", "tool": "WebSearch", "url": None,
+         "query": "mcp tool limit", "agent_id": "res-1", "agent_type": "researcher"},
+    ]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=fetches))
+    assert fails(verify_pack.check_validator_tool_restrictions(ctx)) == []
