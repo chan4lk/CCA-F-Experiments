@@ -45,7 +45,7 @@ PHASE_FOR_ROLE = {
 
 
 def phase_section(text: str, heading: str) -> str:
-    # \b after the heading stops "Phase 5" from swallowing "Phase 5b", and "Phase 7" from
+    # \b after the heading stops "Phase 6" from swallowing "Phase 6b", and "Phase 7" from
     # swallowing "Phase 7b" — both are distinct headings in the document.
     pattern = re.compile(rf"^## {re.escape(heading)}\b.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
     match = pattern.search(text)
