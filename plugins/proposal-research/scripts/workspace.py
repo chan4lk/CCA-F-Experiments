@@ -49,9 +49,9 @@ def normalize_url(url: str | None) -> str:
     join on URLs, so if they ever normalised differently a claim could pass one
     and fail another for no visible reason.
     """
-    if not url:
+    if not url or not url.strip():
         return ""
-    return url.split("#", 1)[0].rstrip("/")
+    return url.strip().split("#", 1)[0].rstrip("/")
 
 
 def iter_fence_state(text: str):
