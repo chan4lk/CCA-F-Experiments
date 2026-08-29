@@ -8,7 +8,7 @@ EXPECTED_TOOLS = {
                    "mcp__microsoft_docs_mcp__microsoft_docs_search",
                    "mcp__microsoft_docs_mcp__microsoft_docs_fetch",
                    "mcp__headroom__headroom_compress"},
-    "validator": {"WebFetch", "mcp__microsoft_docs_mcp__microsoft_docs_fetch"},
+    "validator": {"WebFetch", "mcp__microsoft_docs_mcp__microsoft_docs_fetch", "Bash"},
     "gap-hunter": {"Read", "WebSearch", "Write"},
     "synthesizer": {"Read", "Write"},
     "proposal-writer": {"Read", "Write"},
@@ -50,11 +50,23 @@ def test_tool_sets_match_the_design():
 
 
 def test_validator_cannot_read_the_ledger():
-    """Blindness is enforced by tool restriction, not by instruction."""
+    """Blindness is still mechanical, but the mechanism moved.
+
+    The validator holds Bash because 57% of the claims in the first real run
+    cited PDFs and WebFetch cannot decode one. Bash reopens the hole removing
+    Read had closed, so a PreToolUse guard now blocks a validator's Bash from
+    reaching the workspace. Frontmatter alone is no longer sufficient — this
+    test fails if that guard is ever unregistered.
+    """
+    import json
     tools = tools_of("validator")
     assert "Read" not in tools
-    assert "Bash" not in tools
     assert "Grep" not in tools
+
+    hooks = json.loads((AGENTS.parent / "hooks" / "hooks.json").read_text())
+    commands = [h["command"] for e in hooks["hooks"]["PreToolUse"] for h in e["hooks"]]
+    assert any("validator_guard.py" in c for c in commands), (
+        "validator has Bash but no guard is registered — blindness is unenforced")
 
 
 def test_validator_cannot_search():
