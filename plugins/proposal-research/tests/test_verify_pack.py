@@ -600,8 +600,24 @@ def test_claim_quotes_is_wired_into_the_runner():
 # --- check 6: source mix ------------------------------------------------
 
 def test_vendor_doc_material_claims_pass_source_mix(tmp_path):
+    """Asserts on the WARNs, since check_source_mix never emits a FAIL.
+
+    It previously asserted fails() == [], which is trivially true for any input
+    at all and so could not fail — the same class of vacuous test this build has
+    escalated twice.
+    """
     ctx = verify_pack.load_context(build.make_workspace(tmp_path))
-    assert fails(verify_pack.check_source_mix(ctx)) == []
+    assert verify_pack.check_source_mix(ctx) == []
+
+
+def test_check_source_mix_only_ever_warns(tmp_path):
+    """Pins the premise the test above rests on."""
+    claims = [dict(build.CLAIM_MATERIAL, source_type="forum"),
+              dict(build.CLAIM_CONTEXT, source_type="blog")]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, claims=claims))
+    findings = verify_pack.check_source_mix(ctx)
+    assert findings
+    assert all(f.severity == verify_pack.WARN for f in findings)
 
 
 def test_material_claim_sourced_from_blog_warns(tmp_path):
