@@ -277,13 +277,125 @@ def test_short_transition_paragraph_is_ignored(tmp_path):
     assert fails(verify_pack.check_uncited_prose(ctx)) == []
 
 
-def test_headings_tables_and_code_are_ignored(tmp_path):
+def test_headings_and_code_are_ignored(tmp_path):
+    """Genuine structure stays exempt. Tables no longer do — see the tests below.
+
+    This test previously asserted tables were exempt as well. That exemption was
+    the hole Critical 1 walked through: a pack of bullets and table rows and no
+    citations at all passed the whole gate. Headings and fenced code are still
+    exempt because neither is the pack asserting anything.
+    """
     pack = build.PACK_OK.replace(
         "## Unverified & excluded",
         "### A heading that is quite long indeed and has many words in it here\n\n"
-        "| column one | column two | column three | column four | column five |\n"
-        "|---|---|---|---|---|\n\n"
         "```\nsome code block with plenty of words inside it for length\n```\n\n"
+        "## Unverified & excluded",
+    )
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert fails(verify_pack.check_uncited_prose(ctx)) == []
+
+
+UNCITED_BULLETS_AND_TABLE = """# Evidence Pack: Copilot Studio
+
+## Summary
+
+- Copilot Studio enforces a hard cap of 10 MCP tools per server connection, a binding constraint.
+- Licensing is 200 USD per tenant per month for the Copilot Studio prepaid capacity pack.
+- MCP support in Copilot Studio is generally available in all commercial regions today.
+
+## Recommendation
+
+| Option | Tool cap | Price | Availability |
+|---|---|---|---|
+| Copilot Studio + MCP | 10 tools per server, a hard limit | 200 USD per tenant monthly | GA in all commercial regions |
+
+## Unverified & excluded
+
+Nothing was excluded.
+"""
+
+
+def test_pack_of_uncited_bullets_and_table_rows_fails(tmp_path):
+    """Critical 1: a cap, a price and an availability claim, zero citations.
+
+    Every other check keys off the citations that are present, so with none
+    present this check is the only thing standing between that pack and a PASS.
+    """
+    ws = build.make_workspace(tmp_path, claims=[], verdicts=[], fetches=[],
+                              pack=UNCITED_BULLETS_AND_TABLE)
+    assert verify_pack.main(["--workspace", str(ws)]) == 1
+    ctx = verify_pack.load_context(ws)
+    kinds = {f.message.split()[1] for f in fails(verify_pack.check_uncited_prose(ctx))}
+    assert kinds == {"list", "table"}  # "factual list item" / "factual table row"
+    assert len(fails(verify_pack.check_uncited_prose(ctx))) == 4
+
+
+def test_cited_bullets_and_table_rows_pass(tmp_path):
+    pack = UNCITED_BULLETS_AND_TABLE.replace("constraint.", "constraint [C001].") \
+        .replace("capacity pack.", "capacity pack [C001].") \
+        .replace("regions today.", "regions today [C001].") \
+        .replace("commercial regions |", "commercial regions [C001] |")
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert fails(verify_pack.check_uncited_prose(ctx)) == []
+
+
+def test_short_structural_table_rows_are_ignored(tmp_path):
+    """A table of contents asserts nothing; the word threshold keeps it exempt."""
+    pack = build.PACK_OK.replace(
+        "## Unverified & excluded",
+        "| Section | Page |\n|---|---|\n| Findings | 2 |\n| Options | 5 |\n\n"
+        "## Unverified & excluded",
+    )
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert fails(verify_pack.check_uncited_prose(ctx)) == []
+
+
+def test_short_open_questions_bullets_are_ignored(tmp_path):
+    pack = build.PACK_OK.replace(
+        "## Unverified & excluded",
+        "## Open Questions\n\n- Regional GA status\n- Seat pricing at 500 users\n\n"
+        "## Unverified & excluded",
+    )
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert fails(verify_pack.check_uncited_prose(ctx)) == []
+
+
+def test_a_no_citation_marker_above_a_list_exempts_the_whole_list(tmp_path):
+    """The escape hatch is block-level, so an Open Questions list needs one marker."""
+    pack = build.PACK_OK.replace(
+        "## Unverified & excluded",
+        "## Open Questions\n\n"
+        "<!-- no-citation: open questions are by definition not yet evidenced -->\n"
+        "- Whether the ten-tool cap applies per connection or per environment is unconfirmed.\n"
+        "- Whether seat pricing changes above five hundred users is unconfirmed anywhere.\n\n"
+        "## Unverified & excluded",
+    )
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert fails(verify_pack.check_uncited_prose(ctx)) == []
+
+
+def test_a_wrapped_list_item_is_one_unit(tmp_path):
+    """The citation at the end of a wrapped bullet must satisfy the whole bullet."""
+    pack = build.PACK_OK.replace(
+        "## Unverified & excluded",
+        "- Copilot Studio enforces a hard cap of ten MCP tools per server connection,\n"
+        "  which is the binding constraint on this design [C001].\n\n"
+        "## Unverified & excluded",
+    )
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert fails(verify_pack.check_uncited_prose(ctx)) == []
+
+
+def test_table_delimiter_rows_are_never_flagged():
+    units = verify_pack._body_units("| a | b |\n|:---|---:|\n| x | y |")
+    assert [u.text for u in units] == ["a b", "x y"]
+
+
+def test_blockquotes_remain_exempt(tmp_path):
+    """A blockquote carries verbatim source text, not the pack's own assertion."""
+    pack = build.PACK_OK.replace(
+        "## Unverified & excluded",
+        "> A maximum of ten tools per MCP server connection is supported by the product.\n\n"
         "## Unverified & excluded",
     )
     ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
