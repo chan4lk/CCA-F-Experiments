@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from workspace import (  # noqa: E402
     CLAIM_ID_RE,
+    MAX_QUOTE_WORDS,
     SOURCE_TYPES,
     TIERS,
     append_jsonl,
@@ -24,7 +25,6 @@ from workspace import (  # noqa: E402
 )
 
 REQUIRED = ("id", "sub_q", "tier", "claim", "url", "quote", "source_type")
-MAX_QUOTE_WORDS = 50
 
 
 def validate_claim(row: dict, existing_ids: set[str]) -> list[str]:

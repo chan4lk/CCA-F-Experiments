@@ -18,6 +18,7 @@ from workspace import (  # noqa: E402
     CLAIM_ID_RE,
     VERDICTS,
     append_jsonl,
+    normalize_url,
     read_jsonl,
     utc_now,
 )
@@ -53,12 +54,6 @@ def validate_verdict(row: dict) -> list[str]:
     return errors
 
 
-def _normalize_url(url: str | None) -> str:
-    if not url:
-        return ""
-    return url.split("#", 1)[0].rstrip("/")
-
-
 def resolve_validator_agent_id(workspace: Path, url: str) -> str | None:
     """Identify the validator from fetch evidence rather than self-report.
 
@@ -66,12 +61,12 @@ def resolve_validator_agent_id(workspace: Path, url: str) -> str | None:
     derived from the same log the gate checks, so a verdict can only carry an
     id that genuinely fetched the page.
     """
-    target = _normalize_url(url)
+    target = normalize_url(url)
     found = None
     for row in read_jsonl(Path(workspace) / "fetch-log.jsonl"):
         if row.get("agent_type") != "validator":
             continue
-        if _normalize_url(row.get("url")) != target:
+        if normalize_url(row.get("url")) != target:
             continue
         if row.get("agent_id"):
             found = row["agent_id"]

@@ -13,7 +13,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from workspace import read_jsonl  # noqa: E402
+from workspace import iter_fence_state, normalize_url, read_jsonl  # noqa: E402
 
 FAIL = "FAIL"
 WARN = "WARN"
@@ -68,7 +68,9 @@ def load_context(workspace: Path, pack_name: str = "evidence-pack.md") -> Contex
 
     verdicts: dict[str, list[dict]] = {}
     for row in read_jsonl(workspace / "verdicts.jsonl"):
-        verdicts.setdefault(row.get("claim_id"), []).append(row)
+        claim_id = row.get("claim_id")
+        if claim_id:
+            verdicts.setdefault(claim_id, []).append(row)
 
     return Context(
         workspace=workspace,
@@ -162,13 +164,6 @@ def check_verdict_admission(ctx: Context) -> list[Finding]:
     return findings
 
 
-def normalize_url(url: str | None) -> str:
-    """Compare URLs ignoring fragment and trailing slash."""
-    if not url:
-        return ""
-    return url.split("#", 1)[0].rstrip("/")
-
-
 def _fetched_urls_by_agent(ctx: Context) -> dict[str, set[str]]:
     by_agent: dict[str, set[str]] = {}
     for row in ctx.fetches:
@@ -258,17 +253,12 @@ MIN_FACTUAL_WORDS = 12
 def _body_paragraphs(body: str) -> list[str]:
     """Prose paragraphs only: no headings, tables, list items, or code blocks."""
     paragraphs = []
-    in_code = False
-    for block in body.split("\n\n"):
+    outside_fences = "\n".join(
+        line for line, in_fence in iter_fence_state(body) if not in_fence
+    )
+    for block in outside_fences.split("\n\n"):
         block = block.strip()
         if not block:
-            continue
-        if block.startswith("```"):
-            in_code = not block.endswith("```") or block.count("```") % 2 == 1
-            continue
-        if in_code:
-            if "```" in block:
-                in_code = False
             continue
         first = block.splitlines()[0].lstrip()
         if first.startswith(("#", "|", ">", "-", "*", "+")):

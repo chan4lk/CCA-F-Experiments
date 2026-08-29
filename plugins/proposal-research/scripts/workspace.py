@@ -29,6 +29,8 @@ SOURCE_TYPES = {
     "internal",
 }
 
+MAX_QUOTE_WORDS = 50
+
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 
 
@@ -38,6 +40,35 @@ def slugify(text: str) -> str:
     if len(s) <= 60:
         return s
     return s[:60].rstrip("-")
+
+
+def normalize_url(url: str | None) -> str:
+    """Compare URLs ignoring fragment and trailing slash.
+
+    One implementation on purpose: the gate, the verdict CLI and the ingester all
+    join on URLs, so if they ever normalised differently a claim could pass one
+    and fail another for no visible reason.
+    """
+    if not url:
+        return ""
+    return url.split("#", 1)[0].rstrip("/")
+
+
+def iter_fence_state(text: str):
+    """Yield ``(line, in_fence)`` for every line of markdown text.
+
+    A ``` line toggles the state and is itself reported as inside the fence, so a
+    caller that skips fenced lines drops the fence markers too. A plain toggle is
+    the only correct reading of a fence: any attempt to infer the state from a
+    block's shape fails open on a closing fence that stands alone.
+    """
+    in_fence = False
+    for line in (text or "").splitlines():
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            yield line, True
+            continue
+        yield line, in_fence
 
 
 def workspace_root(cwd: Path, slug: str) -> Path:

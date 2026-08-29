@@ -84,3 +84,54 @@ def test_claim_id_regex_matches_padded_ids():
     assert workspace.CLAIM_ID_RE.fullmatch("C1234")
     assert not workspace.CLAIM_ID_RE.fullmatch("C12")
     assert not workspace.CLAIM_ID_RE.fullmatch("X012")
+
+
+# --- shared url normalisation (one implementation, three call sites) ------
+
+def test_normalize_url_strips_fragment_and_trailing_slash():
+    assert workspace.normalize_url("https://a.com/x/#frag") == "https://a.com/x"
+    assert workspace.normalize_url("https://a.com/x") == "https://a.com/x"
+
+
+def test_normalize_url_handles_none_and_empty():
+    assert workspace.normalize_url(None) == ""
+    assert workspace.normalize_url("") == ""
+
+
+def test_gate_verdict_cli_and_ingester_share_one_normalizer():
+    """All three joined on URLs with their own copy; drift would be invisible."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import add_verdict
+    import ingest_context
+    import verify_pack
+    assert verify_pack.normalize_url is workspace.normalize_url
+    assert add_verdict.normalize_url is workspace.normalize_url
+    assert ingest_context.normalize_url is workspace.normalize_url
+
+
+# --- fence state ---------------------------------------------------------
+
+def test_iter_fence_state_marks_fenced_lines_and_the_fences_themselves():
+    text = "before\n```\ncode\n```\nafter"
+    assert list(workspace.iter_fence_state(text)) == [
+        ("before", False), ("```", True), ("code", True), ("```", True), ("after", False),
+    ]
+
+
+def test_iter_fence_state_closes_on_a_lone_closing_fence():
+    """A closing fence preceded by a blank line must still close the block."""
+    text = "```\ncode\n\n```\nafter"
+    states = dict(zip(range(5), [s for _, s in workspace.iter_fence_state(text)]))
+    assert states[4] is False
+
+
+def test_iter_fence_state_handles_language_tagged_fences():
+    text = "```python\ncode\n```\nafter"
+    assert list(workspace.iter_fence_state(text))[-1] == ("after", False)
+
+
+def test_iter_fence_state_on_empty_text():
+    assert list(workspace.iter_fence_state("")) == []
+    assert list(workspace.iter_fence_state(None)) == []
