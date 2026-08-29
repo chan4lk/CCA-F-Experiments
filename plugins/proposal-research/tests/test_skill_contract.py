@@ -136,3 +136,41 @@ def test_commands_have_descriptions():
 
 def test_research_command_invokes_the_skill():
     assert "proposal-research" in (COMMANDS / "research.md").read_text()
+
+
+# --- shipped docs -------------------------------------------------------
+
+README = PLUGIN / "README.md"
+PLUGIN_JSON = PLUGIN / ".claude-plugin" / "plugin.json"
+
+
+def test_readme_describes_the_mechanism_that_actually_exists():
+    """I7: it claimed a hook rejects a claim row that has no quote.
+
+    No hook validates quotes. ledger_lint denies Write/Edit on the ledgers
+    unconditionally and the quote rule lives in add_claim.py, with the gate
+    re-checking it. On a plugin selling structural enforcement, describing the
+    wrong structure is the worst place for a doc bug.
+    """
+    text = README.read_text(encoding="utf-8")
+    assert "rejected by a hook before it lands" not in text
+    assert "add_claim.py" in text and "PreToolUse" in text
+
+
+def test_readme_states_a_python_version_the_code_supports():
+    assert "Python 3.12+" not in README.read_text(encoding="utf-8")
+
+
+def test_readme_does_not_bake_in_an_authors_local_path():
+    assert "~/repos/CCAF" not in README.read_text(encoding="utf-8")
+
+
+def test_plugin_description_counts_the_hooks_correctly():
+    """M6: it said "two PostToolUse hooks"; one of them is PreToolUse."""
+    import json
+    cfg = json.loads((PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    assert len(cfg["hooks"]["PostToolUse"]) == 1
+    assert len(cfg["hooks"]["PreToolUse"]) == 1
+    description = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))["description"]
+    assert "two PostToolUse hooks" not in description
+    assert "PreToolUse" in description
