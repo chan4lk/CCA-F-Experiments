@@ -82,3 +82,63 @@ def test_main_rejects_invalid_and_writes_nothing(tmp_path, capsys):
     assert rc == 1
     assert not (tmp_path / "verdicts.jsonl").exists()
     assert "verdict" in capsys.readouterr().err
+
+
+def write_fetch_log(tmp_path, rows):
+    (tmp_path / "fetch-log.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
+def test_resolve_validator_agent_id_finds_the_fetching_validator(tmp_path):
+    write_fetch_log(tmp_path, [
+        {"tool": "WebFetch", "url": "https://a.com/x", "agent_id": "res-1", "agent_type": "researcher"},
+        {"tool": "WebFetch", "url": "https://a.com/x", "agent_id": "val-9", "agent_type": "validator"},
+    ])
+    assert add_verdict.resolve_validator_agent_id(tmp_path, "https://a.com/x") == "val-9"
+
+
+def test_resolve_ignores_trailing_slash_and_fragment(tmp_path):
+    write_fetch_log(tmp_path, [
+        {"tool": "WebFetch", "url": "https://a.com/x/", "agent_id": "val-9", "agent_type": "validator"},
+    ])
+    assert add_verdict.resolve_validator_agent_id(tmp_path, "https://a.com/x#top") == "val-9"
+
+
+def test_resolve_returns_none_when_no_validator_fetched_it(tmp_path):
+    write_fetch_log(tmp_path, [
+        {"tool": "WebFetch", "url": "https://a.com/x", "agent_id": "res-1", "agent_type": "researcher"},
+    ])
+    assert add_verdict.resolve_validator_agent_id(tmp_path, "https://a.com/x") is None
+
+
+def test_resolve_returns_the_latest_when_several_validators_fetched(tmp_path):
+    write_fetch_log(tmp_path, [
+        {"tool": "WebFetch", "url": "https://a.com/x", "agent_id": "val-1", "agent_type": "validator"},
+        {"tool": "WebFetch", "url": "https://a.com/x", "agent_id": "val-2", "agent_type": "validator"},
+    ])
+    assert add_verdict.resolve_validator_agent_id(tmp_path, "https://a.com/x") == "val-2"
+
+
+def test_main_infers_agent_id_from_the_fetch_log(tmp_path):
+    write_fetch_log(tmp_path, [
+        {"tool": "WebFetch", "url": "https://a.com/x", "agent_id": "val-7", "agent_type": "validator"},
+    ])
+    row = {k: v for k, v in VALID.items() if k != "validator_agent_id"}
+    rc = add_verdict.main([
+        "--workspace", str(tmp_path), "--json", json.dumps(row),
+        "--infer-agent-from", "https://a.com/x",
+    ])
+    assert rc == 0
+    rows = [json.loads(l) for l in (tmp_path / "verdicts.jsonl").read_text().splitlines() if l.strip()]
+    assert rows[0]["validator_agent_id"] == "val-7"
+
+
+def test_main_fails_when_inference_finds_nothing(tmp_path, capsys):
+    write_fetch_log(tmp_path, [])
+    row = {k: v for k, v in VALID.items() if k != "validator_agent_id"}
+    rc = add_verdict.main([
+        "--workspace", str(tmp_path), "--json", json.dumps(row),
+        "--infer-agent-from", "https://a.com/x",
+    ])
+    assert rc == 1
+    assert "no validator" in capsys.readouterr().err.lower()
