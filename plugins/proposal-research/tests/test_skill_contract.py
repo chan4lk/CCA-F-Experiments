@@ -166,11 +166,20 @@ def test_readme_does_not_bake_in_an_authors_local_path():
 
 
 def test_plugin_description_counts_the_hooks_correctly():
-    """M6: it said "two PostToolUse hooks"; one of them is PreToolUse."""
+    """The description must count the hooks that actually exist.
+
+    It once said "two PostToolUse hooks" when one was PreToolUse. The counts
+    are now derived from hooks.json rather than hardcoded, so adding a hook
+    fails this test until the description is updated with it.
+    """
     import json
     cfg = json.loads((PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-    assert len(cfg["hooks"]["PostToolUse"]) == 1
-    assert len(cfg["hooks"]["PreToolUse"]) == 1
+    post = len(cfg["hooks"]["PostToolUse"])
+    pre = len(cfg["hooks"]["PreToolUse"])
     description = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))["description"]
-    assert "two PostToolUse hooks" not in description
-    assert "PreToolUse" in description
+
+    words = {1: "one", 2: "two", 3: "three", 4: "four"}
+    assert f"{words[post]} PostToolUse hook" in description, (
+        f"hooks.json has {post} PostToolUse hook(s); the description disagrees")
+    assert f"{words[pre]} PreToolUse hook" in description, (
+        f"hooks.json has {pre} PreToolUse hook(s); the description disagrees")

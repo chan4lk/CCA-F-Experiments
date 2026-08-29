@@ -2,11 +2,18 @@
   "name": "proposal-research",
   "displayName": "Proposal Research",
   "version": "0.1.0",
-  "description": "Multi-agent web research for product and solution proposals. Six subagents communicate through append-only claim ledgers; a PostToolUse hook records every fetch with its originating agent_id and a PreToolUse hook keeps the ledgers append-only; a blocking gate proves citation provenance and validator blindness before a proposal is drafted. Emits a self-contained Obsidian vault per run.",
-  "author": { "name": "Chandima Ranaweera" },
+  "description": "Multi-agent web research for product and solution proposals. Six subagents communicate through append-only claim ledgers; one PostToolUse hook records every fetch with its originating agent_id, and two PreToolUse hooks keep the ledgers append-only and keep the validator blind; a blocking gate proves citation provenance and validator independence before a proposal is drafted. Emits a self-contained Obsidian vault per run.",
+  "author": {
+    "name": "Chandima Ranaweera"
+  },
   "license": "MIT",
   "keywords": [
-    "research", "proposal", "citations", "provenance",
-    "obsidian", "multi-agent", "anti-hallucination"
+    "research",
+    "proposal",
+    "citations",
+    "provenance",
+    "obsidian",
+    "multi-agent",
+    "anti-hallucination"
   ]
 }
