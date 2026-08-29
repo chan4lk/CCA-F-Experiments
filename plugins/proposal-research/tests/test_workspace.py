@@ -93,9 +93,11 @@ def test_normalize_url_strips_fragment_and_trailing_slash():
     assert workspace.normalize_url("https://a.com/x") == "https://a.com/x"
 
 
-def test_normalize_url_handles_none_and_empty():
+def test_normalize_url_handles_none_empty_and_whitespace():
     assert workspace.normalize_url(None) == ""
     assert workspace.normalize_url("") == ""
+    assert workspace.normalize_url("   ") == ""
+    assert workspace.normalize_url("  https://a.com/x  ") == "https://a.com/x"
 
 
 def test_gate_verdict_cli_and_ingester_share_one_normalizer():

@@ -239,6 +239,21 @@ def test_empty_fetch_log_fails_every_cited_claim(tmp_path):
     assert len(fails(verify_pack.check_fetch_provenance(ctx))) == 2
 
 
+def test_cited_claim_with_no_url_fails_provenance(tmp_path):
+    """I1: `if url and ...` skipped a urlless claim, so the check passed vacuously."""
+    claims = [{k: v for k, v in build.CLAIM_MATERIAL.items() if k != "url"},
+              build.CLAIM_CONTEXT]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, claims=claims))
+    findings = fails(verify_pack.check_fetch_provenance(ctx))
+    assert any("C001" in f.message and "no url" in f.message for f in findings)
+
+
+def test_cited_claim_with_blank_url_fails_provenance(tmp_path):
+    claims = [dict(build.CLAIM_MATERIAL, url="  "), build.CLAIM_CONTEXT]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, claims=claims))
+    assert any("no url" in f.message for f in fails(verify_pack.check_fetch_provenance(ctx)))
+
+
 # --- check 4: validator blindness --------------------------------------
 
 def test_clean_workspace_passes_blindness(tmp_path):
@@ -274,6 +289,28 @@ def test_blindness_only_applies_to_body_claims(tmp_path):
     pack = "# Pack\n\nNo citations here.\n\n## Unverified & excluded\n\n- [C001]\n"
     ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=[], pack=pack))
     assert fails(verify_pack.check_validator_blindness(ctx)) == []
+
+
+def test_urlless_body_claim_fails_blindness(tmp_path):
+    """I1: `if not url: continue` skipped it, so blindness passed vacuously too."""
+    claims = [{k: v for k, v in build.CLAIM_MATERIAL.items() if k != "url"},
+              build.CLAIM_CONTEXT]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, claims=claims))
+    findings = fails(verify_pack.check_validator_blindness(ctx))
+    assert any("C001" in f.message and "no url" in f.message for f in findings)
+
+
+def test_a_urlless_material_claim_no_longer_passes_the_whole_gate(tmp_path):
+    """I1 end to end: an empty fetch log used to give findings: [] and GATE: PASS."""
+    claims = [{k: v for k, v in build.CLAIM_MATERIAL.items() if k != "url"}]
+    pack = ("# Pack\n\nCopilot Studio caps MCP tools at 10 per server connection "
+            "[C001].\n")
+    ws = build.make_workspace(
+        tmp_path, claims=claims, fetches=[], pack=pack,
+        verdicts=[v for v in build.VERDICTS_OK if v["claim_id"] == "C001"])
+    assert verify_pack.main(["--workspace", str(ws)]) == 1
+    checks = {f.check for f in fails(verify_pack.run_checks(verify_pack.load_context(ws)))}
+    assert {"fetch-provenance", "validator-blindness"} <= checks
 
 
 # --- validator tool restrictions ---------------------------------------
@@ -493,6 +530,71 @@ def test_appendix_prose_is_never_flagged(tmp_path):
         "and are recorded here so the reader can see what was excluded.\n")
     ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
     assert fails(verify_pack.check_uncited_prose(ctx)) == []
+
+
+# --- check 7: claim quotes ----------------------------------------------
+
+def test_clean_workspace_passes_claim_quotes(tmp_path):
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path))
+    assert verify_pack.check_claim_quotes(ctx) == []
+
+
+def test_cited_claim_with_no_quote_fails(tmp_path):
+    """I2: the gate never read `quote`.
+
+    add_claim.py enforces it, but ledger_lint only guards Write and Edit, and the
+    researcher agent carries Bash — so an append redirect reaches claims.jsonl
+    unvalidated.
+    """
+    claims = [{k: v for k, v in build.CLAIM_MATERIAL.items() if k != "quote"},
+              build.CLAIM_CONTEXT]
+    ws = build.make_workspace(tmp_path, claims=claims)
+    ctx = verify_pack.load_context(ws)
+    findings = fails(verify_pack.check_claim_quotes(ctx))
+    assert any("C001" in f.message and "no verbatim quote" in f.message for f in findings)
+    assert verify_pack.main(["--workspace", str(ws)]) == 1
+
+
+def test_cited_claim_with_blank_quote_fails(tmp_path):
+    claims = [dict(build.CLAIM_MATERIAL, quote="   "), build.CLAIM_CONTEXT]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, claims=claims))
+    assert any("no verbatim quote" in f.message
+               for f in fails(verify_pack.check_claim_quotes(ctx)))
+
+
+def test_cited_claim_with_an_overlong_quote_fails(tmp_path):
+    claims = [dict(build.CLAIM_MATERIAL, quote=" ".join(["word"] * 51)),
+              build.CLAIM_CONTEXT]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, claims=claims))
+    findings = fails(verify_pack.check_claim_quotes(ctx))
+    assert any("51-word quote" in f.message for f in findings)
+
+
+def test_a_quote_at_exactly_the_limit_passes(tmp_path):
+    claims = [dict(build.CLAIM_MATERIAL, quote=" ".join(["word"] * 50)),
+              build.CLAIM_CONTEXT]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, claims=claims))
+    assert fails(verify_pack.check_claim_quotes(ctx)) == []
+
+
+def test_quote_check_covers_appendix_citations_too(tmp_path):
+    """The appendix is where excluded claims live; they still need their quote."""
+    claims = [build.CLAIM_MATERIAL, dict(build.CLAIM_CONTEXT, quote="")]
+    pack = "# Pack\n\nCited [C001].\n\n## Unverified & excluded\n\n- Dropped [C002]\n"
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, claims=claims, pack=pack))
+    assert any("C002" in f.message for f in fails(verify_pack.check_claim_quotes(ctx)))
+
+
+def test_uncited_claims_are_not_quote_checked(tmp_path):
+    """A ledger row nobody cited cannot mislead the reader."""
+    claims = [build.CLAIM_MATERIAL, build.CLAIM_CONTEXT,
+              dict(build.CLAIM_MATERIAL, id="C003", quote="")]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, claims=claims))
+    assert fails(verify_pack.check_claim_quotes(ctx)) == []
+
+
+def test_claim_quotes_is_wired_into_the_runner():
+    assert verify_pack.check_claim_quotes in verify_pack.ALL_CHECKS
 
 
 # --- check 6: source mix ------------------------------------------------

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """The gate. Proves an evidence pack's claims are backed by retrieved pages.
 
-Six checks, added across three tasks. Non-zero exit blocks the pipeline.
+Seven checks. Non-zero exit blocks the pipeline. The gate is the last line of
+defence and assumes nothing about what the writer validated: every field it
+relies on — url, quote, caveat, claim_id — is checked here too.
 """
 from __future__ import annotations
 
@@ -13,7 +15,12 @@ from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from workspace import iter_fence_state, normalize_url, read_jsonl  # noqa: E402
+from workspace import (  # noqa: E402
+    MAX_QUOTE_WORDS,
+    iter_fence_state,
+    normalize_url,
+    read_jsonl,
+)
 
 FAIL = "FAIL"
 WARN = "WARN"
@@ -207,7 +214,13 @@ def check_fetch_provenance(ctx: Context) -> list[Finding]:
         if claim is None:
             continue
         url = normalize_url(claim.get("url"))
-        if url and url not in all_fetched:
+        if not url:
+            findings.append(Finding(
+                "fetch-provenance", FAIL,
+                f"{claim_id} is cited but its ledger row carries no url, so there is no "
+                f"page whose retrieval could be proven",
+            ))
+        elif url not in all_fetched:
             findings.append(Finding(
                 "fetch-provenance", FAIL,
                 f"{claim_id} cites {claim.get('url')} but that page was never retrieved "
@@ -231,6 +244,11 @@ def check_validator_blindness(ctx: Context) -> list[Finding]:
             continue
         url = normalize_url(claim.get("url"))
         if not url:
+            findings.append(Finding(
+                "validator-blindness", FAIL,
+                f"{claim_id} is cited in the pack body but its ledger row carries no url, "
+                f"so no validator's independence can be proven against it",
+            ))
             continue
 
         for ruling in ctx.verdicts.get(claim_id, []):
@@ -361,6 +379,37 @@ def check_uncited_prose(ctx: Context) -> list[Finding]:
     return findings
 
 
+def check_claim_quotes(ctx: Context) -> list[Finding]:
+    """Check 7: every cited claim rests on a verbatim quote of workable length.
+
+    Requirement (a) of the guarantee — a claim is backed by a verbatim quote —
+    rested entirely on add_claim.py being the only writer of claims.jsonl. It is
+    not: ledger_lint only guards Write and Edit, and the researcher agent carries
+    Bash, so an append redirect reaches the ledger unvalidated. The gate is the
+    last line of defence and must not assume the writer validated.
+    """
+    findings = []
+    for claim_id in dict.fromkeys(ctx.all_citations):
+        claim = ctx.claims.get(claim_id)
+        if claim is None:
+            continue
+        quote = (claim.get("quote") or "").strip()
+        if not quote:
+            findings.append(Finding(
+                "claim-quote", FAIL,
+                f"{claim_id} is cited but its ledger row carries no verbatim quote, so "
+                f"nothing on the page ties the claim to the source",
+            ))
+        elif len(quote.split()) > MAX_QUOTE_WORDS:
+            findings.append(Finding(
+                "claim-quote", FAIL,
+                f"{claim_id} carries a {len(quote.split())}-word quote, over the "
+                f"{MAX_QUOTE_WORDS}-word limit; that is a page dump, not the supporting "
+                f"sentence",
+            ))
+    return findings
+
+
 def check_source_mix(ctx: Context) -> list[Finding]:
     """Check 6: surface material claims resting on weak source types."""
     findings = []
@@ -406,6 +455,7 @@ ALL_CHECKS = [
     check_validator_blindness,
     check_validator_tool_restrictions,
     check_uncited_prose,
+    check_claim_quotes,
     check_source_mix,
 ]
 

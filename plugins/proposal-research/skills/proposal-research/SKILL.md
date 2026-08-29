@@ -146,7 +146,8 @@ pack as trustworthy, until it passes. Typical failures and their real causes:
 | `fetch-provenance` | The claim's URL was never retrieved — usually a fabricated citation, sometimes a missing `.active.json` |
 | `validator-blindness` | A verdict was recorded for a page its validator never opened |
 | `verdict-admission` | A material claim is missing its sonnet escalation pass, or both its verdicts came from the same validator |
-| `uncited-prose` | The synthesizer asserted something with no claim behind it |
+| `uncited-prose` | The synthesizer asserted something with no claim behind it — bullets and table rows count |
+| `claim-quote` | A cited ledger row has no verbatim quote, or one longer than 50 words |
 
 ## HUMAN GATE
 
