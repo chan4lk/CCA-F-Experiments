@@ -217,7 +217,7 @@ def build(workspace: Path, include_proposal: bool = False) -> Path:
 
             written_filenames[preamble_filename] = preamble_title
             (vault / folder / preamble_filename).write_text(
-                render_note(preamble_title, [tag, "proposal-research"], preamble),
+                render_note(preamble_title, [tag, "proposal-research"], linkify_citations(preamble)),
                 encoding="utf-8",
             )
             titles.append(preamble_title)
@@ -239,7 +239,7 @@ def build(workspace: Path, include_proposal: bool = False) -> Path:
 
             written_filenames[filename] = title
             (vault / folder / filename).write_text(
-                render_note(title, [tag, "proposal-research"], body),
+                render_note(title, [tag, "proposal-research"], linkify_citations(body)),
                 encoding="utf-8",
             )
             titles.append(title)
@@ -249,7 +249,7 @@ def build(workspace: Path, include_proposal: bool = False) -> Path:
     # 00-MOC
     (vault / "00-MOC" / "Decision Cheatsheet.md").write_text(
         render_note("Decision Cheatsheet", ["moc", "recommendation", "proposal-research"],
-                    sections["Recommendation"]),
+                    linkify_citations(sections["Recommendation"])),
         encoding="utf-8",
     )
     (vault / "00-MOC" / "Proposal Brief.md").write_text(
@@ -260,12 +260,12 @@ def build(workspace: Path, include_proposal: bool = False) -> Path:
     # 04-Risks-and-Gaps
     (vault / "04-Risks-and-Gaps" / "Open Questions.md").write_text(
         render_note("Open Questions", ["gap", "proposal-research"],
-                    sections.get("Open Questions", "_None recorded._")),
+                    linkify_citations(sections.get("Open Questions", "_None recorded._"))),
         encoding="utf-8",
     )
     (vault / "04-Risks-and-Gaps" / "Unverified Claims.md").write_text(
         render_note("Unverified Claims", ["unverified", "proposal-research"],
-                    sections.get("Unverified & excluded", "_Nothing was excluded._")),
+                    linkify_citations(sections.get("Unverified & excluded", "_Nothing was excluded._"))),
         encoding="utf-8",
     )
 
@@ -291,12 +291,25 @@ def build(workspace: Path, include_proposal: bool = False) -> Path:
     )
     write_ledger_export(vault, claims, verdicts)
 
+    if include_proposal:
+        proposal_path = workspace / "proposal.md"
+        if not proposal_path.is_file():
+            raise FileNotFoundError(
+                f"include_proposal was requested but {proposal_path} does not exist; "
+                f"run the proposal-writer phase first"
+            )
+        (vault / "05-Proposal" / "Draft Proposal.md").write_text(
+            render_note("Draft Proposal", ["proposal", "proposal-research"],
+                        linkify_citations(proposal_path.read_text(encoding="utf-8"))),
+            encoding="utf-8",
+        )
+
     return vault
 
 
 def _render_brief(sections: dict, linked_titles: dict, claims: dict,
                   include_proposal: bool) -> str:
-    lines = [sections["Summary"], "", "## Contents", ""]
+    lines = [linkify_citations(sections["Summary"]), "", "## Contents", ""]
     lines.append("- [[Decision Cheatsheet]]")
     for heading, (_folder, _tag) in SECTION_MAP.items():
         for title in linked_titles.get(heading, []):
@@ -443,3 +456,96 @@ def write_ledger_export(vault: Path, claims: dict, verdicts: dict) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+# --- citation links -------------------------------------------------------
+
+CITATION_RE = re.compile(r"\[(C\d{3,})\](?!\()")
+WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
+ANCHOR_RE = re.compile(r"^### (C\d{3,})$", re.MULTILINE)
+
+
+def linkify_citations(body: str, depth: int = 1) -> str:
+    """Turn [C001] into a relative link to its Sources.md anchor.
+
+    The bracketed id is preserved as the link text so the gate's citation regex
+    still matches vault notes.
+    """
+    prefix = "../" * depth
+    return CITATION_RE.sub(
+        lambda m: f"[{m.group(1)}]({prefix}06-Sources/Sources.md#{m.group(1)})",
+        body or "",
+    )
+
+
+def check_links(vault: Path) -> list[str]:
+    """Unresolved wikilinks and citations with no anchor in Sources.md.
+
+    Read-only: inspects an already-built vault, never modifies it.
+    """
+    vault = Path(vault)
+    notes = [p for p in vault.rglob("*.md") if ".obsidian" not in p.parts]
+    titles = {p.stem for p in notes}
+
+    sources = vault / "06-Sources" / "Sources.md"
+    anchors = set(ANCHOR_RE.findall(sources.read_text(encoding="utf-8"))) if sources.is_file() else set()
+
+    problems: list[str] = []
+    for note in sorted(notes):
+        text = note.read_text(encoding="utf-8")
+        rel = note.relative_to(vault)
+        for target in WIKILINK_RE.findall(text):
+            if target.strip() not in titles:
+                problems.append(f"{rel}: unresolved wikilink [[{target.strip()}]]")
+        for claim_id in re.findall(r"\[(C\d{3,})\]", text):
+            if claim_id not in anchors:
+                problems.append(f"{rel}: citation [{claim_id}] has no anchor in Sources.md")
+    return problems
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build the Obsidian vault for a research run")
+    parser.add_argument("--workspace", required=True, help="research/<slug> directory")
+    parser.add_argument("--with-proposal", action="store_true",
+                        help="include 05-Proposal/Draft Proposal.md (phase 7b)")
+    parser.add_argument("--check-only", action="store_true",
+                        help="verify links in an already-built vault without rebuilding")
+    parser.add_argument("--copy-to", default=None, help="also copy the finished vault here")
+    args = parser.parse_args(argv)
+
+    workspace = Path(args.workspace)
+
+    if args.check_only:
+        problems = check_links(workspace / "vault")
+    else:
+        vault = build(workspace, include_proposal=args.with_proposal)
+        problems = check_links(vault)
+
+    if problems:
+        for problem in problems:
+            print(f"BROKEN LINK: {problem}", file=sys.stderr)
+        print(f"VAULT: FAIL — {len(problems)} broken link(s)", file=sys.stderr)
+        return 1
+
+    vault = workspace / "vault"
+    if args.copy_to:
+        destination = Path(args.copy_to)
+        if destination.resolve() == vault.resolve():
+            print(
+                f"VAULT: FAIL — --copy-to must not point at the source vault itself ({vault})",
+                file=sys.stderr,
+            )
+            return 1
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.copytree(vault, destination)
+        print(f"Copied vault to {destination}")
+
+    print(f"VAULT: OK — {vault}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -734,3 +734,118 @@ def test_verdict_order_in_sources_is_deterministic_regardless_of_input_order(tmp
 
     assert text_forward == text_reversed
     assert "CONFIRMED, MISLEADING" in text_forward
+
+
+# --- citation links -----------------------------------------------------
+
+def test_linkify_turns_citations_into_relative_links():
+    out = build_vault.linkify_citations("A claim [C001].", depth=1)
+    assert out == "A claim [C001](../06-Sources/Sources.md#C001)."
+
+
+def test_linkify_preserves_the_bracketed_id_for_the_gate():
+    assert "[C001]" in build_vault.linkify_citations("x [C001]", depth=1)
+
+
+def test_linkify_handles_multiple_citations():
+    out = build_vault.linkify_citations("[C001] and [C002]", depth=1)
+    assert out.count("06-Sources/Sources.md#") == 2
+
+
+def test_linkify_at_depth_zero_uses_local_path():
+    assert "(06-Sources/Sources.md#C001)" in build_vault.linkify_citations("[C001]", depth=0)
+
+
+def test_linkify_does_not_double_link(tmp_path):
+    once = build_vault.linkify_citations("[C001]", depth=1)
+    assert build_vault.linkify_citations(once, depth=1) == once
+
+
+def test_finding_notes_have_linked_citations(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    text = (vault / "01-Findings" / "MCP tool limits.md").read_text()
+    assert "../06-Sources/Sources.md#C001" in text
+
+
+# --- link integrity -----------------------------------------------------
+
+def test_clean_vault_has_no_broken_links(tmp_path):
+    assert build_vault.check_links(build_vault.build(make_ws(tmp_path))) == []
+
+
+def test_broken_wikilink_is_reported(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    (vault / "01-Findings" / "MCP tool limits.md").write_text("# X\n\nSee [[Nonexistent Note]].\n")
+    problems = build_vault.check_links(vault)
+    assert any("Nonexistent Note" in p for p in problems)
+
+
+def test_citation_without_a_sources_anchor_is_reported(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    (vault / "01-Findings" / "MCP tool limits.md").write_text("# X\n\nOrphan [C999].\n")
+    assert any("C999" in p for p in build_vault.check_links(vault))
+
+
+# --- proposal phase -----------------------------------------------------
+
+def test_proposal_note_is_absent_by_default(tmp_path):
+    vault = build_vault.build(make_ws(tmp_path))
+    assert not (vault / "05-Proposal" / "Draft Proposal.md").exists()
+
+
+def test_proposal_note_is_written_when_requested(tmp_path):
+    ws = make_ws(tmp_path)
+    (ws / "proposal.md").write_text("# Proposal\n\nWe recommend Copilot Studio [C001].\n")
+    vault = build_vault.build(ws, include_proposal=True)
+    text = (vault / "05-Proposal" / "Draft Proposal.md").read_text()
+    assert "We recommend Copilot Studio" in text
+    assert "../06-Sources/Sources.md#C001" in text
+
+
+def test_brief_links_the_proposal_when_present(tmp_path):
+    ws = make_ws(tmp_path)
+    (ws / "proposal.md").write_text("# Proposal\n\nText [C001].\n")
+    vault = build_vault.build(ws, include_proposal=True)
+    assert "[[Draft Proposal]]" in (vault / "00-MOC" / "Proposal Brief.md").read_text()
+
+
+def test_include_proposal_without_the_file_raises(tmp_path):
+    try:
+        build_vault.build(make_ws(tmp_path), include_proposal=True)
+    except FileNotFoundError as exc:
+        assert "proposal.md" in str(exc)
+    else:
+        raise AssertionError("expected FileNotFoundError")
+
+
+# --- CLI ----------------------------------------------------------------
+
+def test_main_builds_and_reports_success(tmp_path, capsys):
+    ws = make_ws(tmp_path)
+    assert build_vault.main(["--workspace", str(ws)]) == 0
+    assert "vault" in capsys.readouterr().out
+
+
+def test_main_fails_on_broken_links(tmp_path):
+    ws = make_ws(tmp_path)
+    build_vault.build(ws)
+    (ws / "vault" / "01-Findings" / "MCP tool limits.md").write_text("# X\n\n[[Ghost]]\n")
+    # rebuild would overwrite, so verify check_links directly drives the exit code
+    assert build_vault.main(["--workspace", str(ws), "--check-only"]) == 1
+
+
+def test_main_copies_the_vault_when_asked(tmp_path):
+    ws = make_ws(tmp_path)
+    dest = tmp_path / "exported"
+    assert build_vault.main(["--workspace", str(ws), "--copy-to", str(dest)]) == 0
+    assert (dest / "00-MOC" / "Proposal Brief.md").is_file()
+    assert (dest / ".obsidian" / "core-plugins.json").is_file()
+
+
+def test_main_refuses_copy_to_that_targets_the_source_vault(tmp_path):
+    """--copy-to rmtrees its destination first; it must never be pointed at the vault itself."""
+    ws = make_ws(tmp_path)
+    vault = ws / "vault"
+    assert build_vault.main(["--workspace", str(ws), "--copy-to", str(vault)]) == 1
+    # The vault must survive the refused copy.
+    assert (vault / "00-MOC" / "Proposal Brief.md").is_file()
