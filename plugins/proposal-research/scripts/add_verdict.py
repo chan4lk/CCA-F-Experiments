@@ -54,23 +54,75 @@ def validate_verdict(row: dict) -> list[str]:
     return errors
 
 
-def resolve_validator_agent_id(workspace: Path, url: str) -> str | None:
-    """Identify the validator from fetch evidence rather than self-report.
+def validators_that_fetched(workspace: Path, url: str) -> list[str]:
+    """Every distinct validator that fetched this URL, in first-seen order.
 
-    Stronger than trusting an agent's claim about its own identity: the id is
-    derived from the same log the gate checks, so a verdict can only carry an
-    id that genuinely fetched the page.
+    Identity comes from fetch evidence rather than self-report: the id is derived
+    from the same log the gate checks, so a verdict can only carry an id that
+    genuinely fetched the page.
+
+    Returns all of them rather than one. Picking the last silently attributed
+    both verdicts on a claim to whichever validator happened to finish second,
+    which made two rulings by one validator look like an escalation.
     """
     target = normalize_url(url)
-    found = None
+    found: list[str] = []
     for row in read_jsonl(Path(workspace) / "fetch-log.jsonl"):
         if row.get("agent_type") != "validator":
             continue
         if normalize_url(row.get("url")) != target:
             continue
-        if row.get("agent_id"):
-            found = row["agent_id"]
+        agent_id = row.get("agent_id")
+        if agent_id and agent_id not in found:
+            found.append(agent_id)
     return found
+
+
+def validators_that_ruled(workspace: Path, claim_id: str) -> set[str]:
+    """Validators already carrying a verdict on this claim."""
+    return {
+        row["validator_agent_id"]
+        for row in read_jsonl(Path(workspace) / "verdicts.jsonl")
+        if row.get("claim_id") == claim_id and row.get("validator_agent_id")
+    }
+
+
+def resolve_validator_agent_id(workspace: Path, url: str, claim_id: str) -> tuple[str | None, str]:
+    """Return (agent_id, error). Exactly one candidate, or nothing at all.
+
+    The candidate set is the validators that fetched this URL and have not yet
+    ruled on this claim. The fetch log is cumulative, so "fetched this URL" alone
+    stops being unambiguous the moment the escalation validator opens the same
+    page; subtracting the validators that have already ruled is what makes
+    inference unambiguous by construction, provided each verdict is recorded
+    before the next validator is dispatched.
+    """
+    fetched = validators_that_fetched(workspace, url)
+    if not fetched:
+        return None, (
+            f"no validator fetched {url} in this run, so the verdict's independence "
+            f"cannot be proven"
+        )
+
+    ruled = validators_that_ruled(workspace, claim_id)
+    candidates = [a for a in fetched if a not in ruled]
+
+    if not candidates:
+        return None, (
+            f"every validator that fetched {url} ({', '.join(fetched)}) has already ruled "
+            f"on {claim_id}. Recording another verdict would have to invent an author. "
+            f"Pass --validator-agent-id <id> if this really is a distinct validator."
+        )
+    if len(candidates) > 1:
+        return None, (
+            f"{len(candidates)} validators fetched {url} without yet ruling on {claim_id} "
+            f"({', '.join(candidates)}), so this verdict's author cannot be inferred. "
+            f"Guessing would attribute both rulings on a claim to one validator and make a "
+            f"single pass look like an escalation.\n"
+            f"Record each verdict immediately after that validator returns, before "
+            f"dispatching the next one, or pass --validator-agent-id <id> explicitly."
+        )
+    return candidates[0], ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -78,8 +130,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", required=True, help="research/<slug> directory")
     parser.add_argument("--json", required=True, help="verdict row as a JSON object")
     parser.add_argument("--infer-agent-from", default=None,
-                        help="resolve validator_agent_id from the fetch log for this URL")
+                        help="resolve validator_agent_id from the fetch log for this URL; "
+                             "refuses if more than one validator fetched it")
+    parser.add_argument("--validator-agent-id", default=None,
+                        help="state the validator's agent_id explicitly; the unambiguous "
+                             "path when several validators fetched the same URL")
     args = parser.parse_args(argv)
+
+    if args.infer_agent_from and args.validator_agent_id:
+        print(
+            "REJECTED: pass either --infer-agent-from or --validator-agent-id, not both",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         row = json.loads(args.json)
@@ -90,14 +153,14 @@ def main(argv: list[str] | None = None) -> int:
         print("REJECTED: --json must be a JSON object", file=sys.stderr)
         return 1
 
+    if args.validator_agent_id:
+        row["validator_agent_id"] = args.validator_agent_id
+
     if args.infer_agent_from:
-        agent_id = resolve_validator_agent_id(Path(args.workspace), args.infer_agent_from)
-        if not agent_id:
-            print(
-                f"REJECTED: no validator fetched {args.infer_agent_from} in this run, so the "
-                f"verdict's independence cannot be proven",
-                file=sys.stderr,
-            )
+        agent_id, error = resolve_validator_agent_id(
+            Path(args.workspace), args.infer_agent_from, row.get("claim_id"))
+        if error:
+            print(f"REJECTED: {error}", file=sys.stderr)
             return 1
         row["validator_agent_id"] = agent_id
 
