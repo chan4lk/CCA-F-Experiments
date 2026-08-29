@@ -260,3 +260,28 @@ def test_main_fails_when_inference_finds_nothing(tmp_path, capsys):
     ])
     assert rc == 1
     assert "no validator" in capsys.readouterr().err.lower()
+
+
+def test_resolve_matches_namespaced_validator_agent_type(tmp_path):
+    """The same bare-vs-namespaced bug killed --infer-agent-from entirely.
+
+    record_fetch writes 'proposal-research:validator', so resolution never
+    matched and the flag the SKILL tells the orchestrator to use always refused.
+    """
+    write_fetch_log(tmp_path, [
+        {"tool": "WebFetch", "url": "https://a.com/x", "agent_id": "val-9",
+         "agent_type": "proposal-research:validator"},
+    ])
+    agent_id, err = add_verdict.resolve_validator_agent_id(tmp_path, "https://a.com/x", "C001")
+    assert agent_id == "val-9", err
+
+
+def test_resolve_still_ignores_namespaced_researchers(tmp_path):
+    """A researcher fetching the same page must never be taken for a validator."""
+    write_fetch_log(tmp_path, [
+        {"tool": "WebFetch", "url": "https://a.com/x", "agent_id": "res-1",
+         "agent_type": "proposal-research:researcher"},
+    ])
+    agent_id, err = add_verdict.resolve_validator_agent_id(tmp_path, "https://a.com/x", "C001")
+    assert agent_id is None
+    assert err

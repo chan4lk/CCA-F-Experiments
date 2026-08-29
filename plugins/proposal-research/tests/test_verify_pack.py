@@ -809,3 +809,45 @@ def test_main_accepts_alternate_pack_name(tmp_path):
     ws = build.make_workspace(tmp_path, pack_name="proposal.md")
     assert verify_pack.main(["--workspace", str(ws), "--pack", "proposal.md"]) == 0
     assert (ws / "verify-report-proposal.md").is_file()
+
+
+# --- namespaced agent_type (found by a real run, 2026-08-29) -------------
+
+NS = "proposal-research:validator"
+
+
+def test_validator_tool_restriction_fires_on_namespaced_agent_type(tmp_path):
+    """record_fetch writes 'proposal-research:validator', not 'validator'.
+
+    The check compared against the bare string, so it never fired. A real run
+    logged 531 retrievals and this check was dead for all of them.
+    """
+    fetches = list(build.FETCHES_OK) + [
+        {"ts": "2026-08-29T09:53:00Z", "tool": "WebSearch", "url": None,
+         "query": "friendlier source", "agent_id": "val-s1", "agent_type": NS},
+    ]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=fetches))
+    findings = fails(verify_pack.check_validator_tool_restrictions(ctx))
+    assert len(findings) == 1
+    assert "val-s1" in findings[0].message
+
+
+def test_validator_tool_restriction_still_fires_on_bare_agent_type(tmp_path):
+    """The bare form must keep working — tests and older logs use it."""
+    fetches = list(build.FETCHES_OK) + [
+        {"ts": "2026-08-29T09:53:00Z", "tool": "WebSearch", "url": None,
+         "query": "x", "agent_id": "val-s1", "agent_type": "validator"},
+    ]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=fetches))
+    assert len(fails(verify_pack.check_validator_tool_restrictions(ctx))) == 1
+
+
+def test_researcher_searching_is_still_fine_when_namespaced(tmp_path):
+    """Researchers search legitimately; the suffix match must not catch them."""
+    fetches = list(build.FETCHES_OK) + [
+        {"ts": "2026-08-29T09:53:00Z", "tool": "WebSearch", "url": None,
+         "query": "mcp tool limit", "agent_id": "res-1",
+         "agent_type": "proposal-research:researcher"},
+    ]
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=fetches))
+    assert fails(verify_pack.check_validator_tool_restrictions(ctx)) == []
