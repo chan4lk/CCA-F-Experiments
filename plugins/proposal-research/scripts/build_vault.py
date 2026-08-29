@@ -532,9 +532,27 @@ def main(argv: list[str] | None = None) -> int:
     vault = workspace / "vault"
     if args.copy_to:
         destination = Path(args.copy_to)
-        if destination.resolve() == vault.resolve():
+        dest_resolved = destination.resolve()
+        vault_resolved = vault.resolve()
+        if dest_resolved == vault_resolved:
             print(
-                f"VAULT: FAIL — --copy-to must not point at the source vault itself ({vault})",
+                f"VAULT: FAIL — --copy-to ({destination}) must not point at the source vault "
+                f"itself ({vault}). Nothing was deleted.",
+                file=sys.stderr,
+            )
+            return 1
+        if dest_resolved in vault_resolved.parents:
+            print(
+                f"VAULT: FAIL — --copy-to ({destination}) is an ancestor of the source vault "
+                f"({vault}); deleting it would destroy the vault and the rest of the workspace. "
+                f"Nothing was deleted.",
+                file=sys.stderr,
+            )
+            return 1
+        if vault_resolved in dest_resolved.parents:
+            print(
+                f"VAULT: FAIL — --copy-to ({destination}) is inside the source vault ({vault}); "
+                f"copying a tree into itself is not meaningful. Nothing was deleted.",
                 file=sys.stderr,
             )
             return 1

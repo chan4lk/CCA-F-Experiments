@@ -849,3 +849,26 @@ def test_main_refuses_copy_to_that_targets_the_source_vault(tmp_path):
     assert build_vault.main(["--workspace", str(ws), "--copy-to", str(vault)]) == 1
     # The vault must survive the refused copy.
     assert (vault / "00-MOC" / "Proposal Brief.md").is_file()
+
+
+def test_main_refuses_copy_to_that_is_an_ancestor_of_the_vault(tmp_path):
+    """--copy-to naming the workspace root (or any ancestor of the vault) must be refused —
+    rmtree-ing it would destroy the vault and the rest of the workspace before copytree runs."""
+    ws = make_ws(tmp_path)
+    assert build_vault.main(["--workspace", str(ws), "--copy-to", str(ws)]) == 1
+    # Nothing in the workspace may be deleted by the refused copy.
+    assert (ws / "vault" / "00-MOC" / "Proposal Brief.md").is_file()
+    assert (ws / "claims.jsonl").is_file()
+    assert (ws / "verdicts.jsonl").is_file()
+    assert (ws / "fetch-log.jsonl").is_file()
+    assert (ws / "evidence-pack.md").is_file()
+
+
+def test_main_refuses_copy_to_inside_the_vault(tmp_path):
+    """--copy-to naming a path inside the vault must also be refused."""
+    ws = make_ws(tmp_path)
+    vault = ws / "vault"
+    dest = vault / "nested" / "export"
+    assert build_vault.main(["--workspace", str(ws), "--copy-to", str(dest)]) == 1
+    assert (vault / "00-MOC" / "Proposal Brief.md").is_file()
+    assert not dest.exists()
