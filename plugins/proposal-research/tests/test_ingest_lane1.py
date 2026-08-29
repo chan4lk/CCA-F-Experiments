@@ -83,6 +83,21 @@ def test_load_prior_ledger_missing_path_returns_empty(tmp_path):
     assert ingest_context.load_prior_ledger(tmp_path / "nope") == []
 
 
+def test_verdict_with_no_claim_id_is_not_attached(tmp_path):
+    ws = write_workspace(tmp_path, [CLAIM], [
+        {"verdict": "CONFIRMED", "validator_agent_id": "v1"},  # Missing claim_id
+    ])
+    rows = ingest_context.load_prior_ledger(ws)
+    assert rows[0]["verdicts"] == []
+
+
+def test_claim_with_no_id_is_skipped(tmp_path):
+    claim_no_id = dict(CLAIM, id=None)
+    ws = write_workspace(tmp_path, [claim_no_id], CONFIRMED)
+    rows = ingest_context.load_prior_ledger(ws)
+    assert len(rows) == 0
+
+
 # --- carry forward ------------------------------------------------------
 
 def test_confirmed_claim_is_carried(tmp_path):
@@ -147,3 +162,13 @@ def test_duplicate_urls_are_carried_once():
         dict(CLAIM, id="C009", verdicts=CONFIRMED),
     ], NOW)
     assert len(rows) == 1
+
+
+def test_different_claims_on_same_url_are_both_carried():
+    rows = ingest_context.carry_forward([
+        dict(CLAIM, id="C007", claim="Copilot Studio caps MCP tools at 10", verdicts=CONFIRMED),
+        dict(CLAIM, id="C009", claim="Copilot Studio enforces licensing tier", verdicts=CONFIRMED),
+    ], NOW)
+    assert len(rows) == 2
+    assert rows[0]["claim"] == "Copilot Studio caps MCP tools at 10"
+    assert rows[1]["claim"] == "Copilot Studio enforces licensing tier"
