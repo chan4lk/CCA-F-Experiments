@@ -283,6 +283,7 @@ def check_validator_tool_restrictions(ctx: Context) -> list[Finding]:
 
 
 NO_CITATION_MARKER = "<!-- no-citation:"
+NO_CITATION_RE = re.compile(r"<!--\s*no-citation:\s*(.*?)\s*-->", re.DOTALL)
 MIN_FACTUAL_WORDS = 12
 
 
@@ -354,6 +355,19 @@ def _body_units(body: str) -> list[Unit]:
     return units
 
 
+def _no_citation_reasons(body: str) -> list[str]:
+    """Every escape-hatch marker in the body, so the gate can report each one.
+
+    Both pack writers are told the gate reports every marker. That is what makes
+    the exemption auditable rather than a silent way to drop a section out of the
+    check, so the gate has to actually do it.
+    """
+    outside_fences = "\n".join(
+        line for line, in_fence in iter_fence_state(body) if not in_fence
+    )
+    return [" ".join(m.split()) for m in NO_CITATION_RE.findall(outside_fences)]
+
+
 def check_uncited_prose(ctx: Context) -> list[Finding]:
     """Check 5: no factual body statement lacks a citation.
 
@@ -366,6 +380,11 @@ def check_uncited_prose(ctx: Context) -> list[Finding]:
     which keeps the exemption visible and auditable rather than silent.
     """
     findings = []
+    for reason in _no_citation_reasons(ctx.body):
+        findings.append(Finding(
+            "uncited-prose", WARN,
+            f"a block is exempted from citation by an explicit marker: {reason!r}",
+        ))
     for unit in _body_units(ctx.body):
         if len(unit.text.split()) < MIN_FACTUAL_WORDS:
             continue
@@ -376,6 +395,23 @@ def check_uncited_prose(ctx: Context) -> list[Finding]:
             "uncited-prose", FAIL,
             f"factual {unit.kind} carries no citation: \"{preview}...\"",
         ))
+    return findings
+
+
+def check_source_mix(ctx: Context) -> list[Finding]:
+    """Check 6: surface material claims resting on weak source types."""
+    findings = []
+    weak = {"blog", "forum"}
+    for claim_id in dict.fromkeys(ctx.body_citations):
+        claim = ctx.claims.get(claim_id)
+        if claim is None:
+            continue
+        if claim.get("tier") == "material" and claim.get("source_type") in weak:
+            findings.append(Finding(
+                "source-mix", WARN,
+                f"{claim_id} is material but rests on a {claim.get('source_type')} source; "
+                f"prefer a first-party page for claims that move the proposal",
+            ))
     return findings
 
 
@@ -410,23 +446,6 @@ def check_claim_quotes(ctx: Context) -> list[Finding]:
     return findings
 
 
-def check_source_mix(ctx: Context) -> list[Finding]:
-    """Check 6: surface material claims resting on weak source types."""
-    findings = []
-    weak = {"blog", "forum"}
-    for claim_id in dict.fromkeys(ctx.body_citations):
-        claim = ctx.claims.get(claim_id)
-        if claim is None:
-            continue
-        if claim.get("tier") == "material" and claim.get("source_type") in weak:
-            findings.append(Finding(
-                "source-mix", WARN,
-                f"{claim_id} is material but rests on a {claim.get('source_type')} source; "
-                f"prefer a first-party page for claims that move the proposal",
-            ))
-    return findings
-
-
 def collect_stats(ctx: Context) -> dict:
     source_mix: dict[str, int] = {}
     for claim in ctx.claims.values():
@@ -455,8 +474,8 @@ ALL_CHECKS = [
     check_validator_blindness,
     check_validator_tool_restrictions,
     check_uncited_prose,
-    check_claim_quotes,
     check_source_mix,
+    check_claim_quotes,
 ]
 
 
