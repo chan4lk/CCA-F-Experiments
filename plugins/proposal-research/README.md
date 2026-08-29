@@ -35,3 +35,31 @@ at `research/<slug>/vault/`.
 - Python 3.12+ on PATH as `python3` (stdlib only — no packages to install)
 - Optional: `microsoft_docs_mcp` for first-party Microsoft documentation
 - Optional: `headroom` MCP for in-agent compression
+
+## Installation
+
+    /plugin marketplace add ~/repos/CCAF
+    /plugin install proposal-research@ccaf
+
+Hook configuration hot-reloads, so no restart is needed.
+
+## Verifying the install
+
+    python3 -m pytest plugins/proposal-research/tests/ -v
+
+All tests are stdlib-only and run under the system `python3`.
+
+## How the guarantee works
+
+`research/<slug>/` holds the audit trail for a run:
+
+| File | What it proves |
+|---|---|
+| `claims.jsonl` | Every claim, with the verbatim quote it rests on |
+| `verdicts.jsonl` | Who ruled on each claim and what they found |
+| `fetch-log.jsonl` | Every page retrieved, and which agent retrieved it |
+| `verify-report.md` | The gate result, with source mix and every warning |
+| `vault/06-Sources/Sources.md` | Per-claim anchors plus derived reliability notes |
+
+The gate cross-references the first three. A citation can only survive if the page behind it
+was really fetched, by the validator that really ruled on it.
