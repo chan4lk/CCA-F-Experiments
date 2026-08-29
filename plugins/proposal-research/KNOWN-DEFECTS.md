@@ -16,7 +16,21 @@ what actually happened, what it cost, and what a fix would look like.
 | 4 | `validator-tool-restrictions` check never fires | High | **Fixed** — and it was wider than recorded; see below (`3ded31c`) |
 | 5 | WebFetch's 10 MB ceiling silently drops large PDFs | Moderate | **Mitigated** — `researcher.md` warns and directs to an HTML or smaller source |
 | 6 | `raw_hash` is a write-only field and its documented purpose is false | Moderate | **Fixed** — validated on append, spec claim retracted |
-| 7 | Orchestration, not research, dominated token cost | High | **Fixed** — verdicts batch; SKILL gained context discipline (`3429930`) |
+| 7 | Orchestration, not research, dominated token cost | High | **Instrumented** — `context_guard.py` samples the live context and the gate reports it; SKILL gained narration discipline |
+
+### Defect 7 — what the guard can and cannot do
+
+The orchestrator's own prose was ~500K of the ~600K context growth, and prose is not a
+tool call, so no hook can deny it the way `validator_guard` denies a Bash command. The
+guard measures instead: it samples the live context on every tool call, warns the moment
+one turn adds more than 15K, and writes `context-log.jsonl` so `verify-report.md` states
+the cost next to the work it bought. Replaying the first run's transcript through it
+reproduces 178.9M cache reads against the actual 171.9M — within 4%.
+
+This is weaker than an enforced constraint and is deliberately labelled as such. The
+batching added alongside it (`--batch`) turned out **not** to be the lever: the
+orchestrator called `add_verdict` three times in the whole run, not once per verdict as
+the usage summary implied.
 
 ### Defect 4 was wider than this file recorded
 

@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -851,3 +852,32 @@ def test_researcher_searching_is_still_fine_when_namespaced(tmp_path):
     ]
     ctx = verify_pack.load_context(build.make_workspace(tmp_path, fetches=fetches))
     assert fails(verify_pack.check_validator_tool_restrictions(ctx)) == []
+
+
+# --- context economics in the report -------------------------------------
+
+def test_report_shows_context_economics_when_the_guard_logged_them(tmp_path):
+    """The first run's cost was invisible until someone read the transcript.
+
+    Cache reads are turns x context, so the report states the product rather
+    than leaving it to be reconstructed afterwards.
+    """
+    ws = build.make_workspace(tmp_path)
+    rows = [{"ts": "2026-08-29T09:00:00Z", "tool": "Bash", "context": c,
+             "output": 500, "grew": None} for c in (100_000, 300_000, 500_000)]
+    (ws / "context-log.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    ctx = verify_pack.load_context(ws)
+    stats = verify_pack.collect_stats(ctx)
+    assert stats["context"]["turns_sampled"] == 3
+    assert stats["context"]["peak"] == 500_000
+    report = verify_pack.render_report([], stats, True)
+    assert "Context economics" in report
+    assert "500,000" in report
+
+
+def test_report_omits_context_economics_when_nothing_was_logged(tmp_path):
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path))
+    stats = verify_pack.collect_stats(ctx)
+    assert stats["context"] is None
+    assert "Context economics" not in verify_pack.render_report([], stats, True)

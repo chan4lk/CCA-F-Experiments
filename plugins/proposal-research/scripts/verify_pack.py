@@ -469,6 +469,28 @@ def check_claim_quotes(ctx: Context) -> list[Finding]:
     return findings
 
 
+def _context_economics(workspace: Path) -> dict | None:
+    """What the orchestrator's own context cost, if the guard sampled it.
+
+    Cache reads are turns x context. The first real run spent 172M tokens that
+    way — 65% of everything — and nobody knew until the transcript was read
+    afterwards. Reporting it here puts the number next to the work it bought.
+    """
+    rows = read_jsonl(Path(workspace) / "context-log.jsonl")
+    sizes = [int(r.get("context") or 0) for r in rows if r.get("context")]
+    if not sizes:
+        return None
+    return {
+        "turns_sampled": len(sizes),
+        "first": sizes[0],
+        "peak": max(sizes),
+        "mean": sum(sizes) // len(sizes),
+        "approx_cache_reads": sum(sizes),
+        "biggest_single_turn_growth": max(
+            (int(r["grew"]) for r in rows if r.get("grew")), default=0),
+    }
+
+
 def collect_stats(ctx: Context) -> dict:
     source_mix: dict[str, int] = {}
     for claim in ctx.claims.values():
@@ -482,6 +504,7 @@ def collect_stats(ctx: Context) -> dict:
             verdict_counts[key] = verdict_counts.get(key, 0) + 1
 
     return {
+        "context": _context_economics(ctx.workspace),
         "claims_total": len(ctx.claims),
         "claims_cited": len(set(ctx.all_citations)),
         "source_mix": source_mix,
@@ -539,6 +562,20 @@ def render_report(findings: list[Finding], stats: dict, passed: bool) -> str:
 
     failures = [f for f in findings if f.severity == FAIL]
     warnings = [f for f in findings if f.severity == WARN]
+
+    economics = stats.get("context")
+    if economics:
+        lines += [
+            "", "## Context economics", "",
+            f"- Orchestrator turns sampled: {economics['turns_sampled']:,}",
+            f"- Context: {economics['first']:,} at first sample, "
+            f"{economics['peak']:,} at peak, {economics['mean']:,} mean",
+            f"- Approx cache reads (turns x context): {economics['approx_cache_reads']:,}",
+            f"- Largest single-turn growth: {economics['biggest_single_turn_growth']:,}",
+            "",
+            "Everything the orchestrator writes is re-read on every later turn, so this "
+            "figure is driven by message length as much as by turn count.",
+        ]
 
     lines += ["", "## Failures", ""]
     lines += [f"- **[{f.check}]** {f.message}" for f in failures] or ["- none"]
