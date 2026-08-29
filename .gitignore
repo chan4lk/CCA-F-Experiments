@@ -12,3 +12,4 @@ logs/
 .claude/worktrees/
 .DS_Store
 research/
+headroom_memory.db

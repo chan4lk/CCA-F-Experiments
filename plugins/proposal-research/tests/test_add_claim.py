@@ -175,3 +175,23 @@ def test_missing_fetch_log_names_the_likely_cause(tmp_path, capsys):
     assert rc == 0
     assert "PROVENANCE" in err
     assert "active.json" in err
+
+
+# --- raw_hash honesty (9 claims in a real run recorded the string "n/a") --
+
+def test_raw_hash_may_be_omitted(tmp_path):
+    """Headroom is optional; a claim without a compression hash is fine."""
+    row = {k: v for k, v in VALID.items() if k != "raw_hash"}
+    assert add_claim.validate_claim(row, set()) == []
+
+
+def test_raw_hash_of_n_a_is_rejected(tmp_path):
+    """A real run recorded 'n/a' nine times, and once
+    'n/a-direct-quote-verified-on-fetched-page'. Nothing validated it."""
+    for junk in ("n/a", "N/A", "none", "n/a-direct-quote-verified-on-fetched-page", "-"):
+        errors = add_claim.validate_claim(dict(VALID, raw_hash=junk), set())
+        assert any("raw_hash" in e for e in errors), f"{junk!r} was accepted"
+
+
+def test_a_real_looking_hash_is_accepted():
+    assert add_claim.validate_claim(dict(VALID, raw_hash="fa03013ee499075913dbebef"), set()) == []
