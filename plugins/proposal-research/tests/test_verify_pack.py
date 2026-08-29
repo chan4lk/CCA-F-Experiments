@@ -484,6 +484,34 @@ def test_blockquotes_remain_exempt(tmp_path):
     assert fails(verify_pack.check_uncited_prose(ctx)) == []
 
 
+def test_every_no_citation_marker_is_reported_as_a_warning(tmp_path):
+    """Both writer agents are told the gate reports every marker; it must."""
+    pack = build.PACK_OK.replace(
+        "## Unverified & excluded",
+        "<!-- no-citation: framing, not a factual claim -->\n"
+        "This section compares the two candidate architectures against the client's "
+        "stated priorities rather than asserting any new external fact.\n\n"
+        "## Unverified & excluded",
+    )
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    findings = verify_pack.check_uncited_prose(ctx)
+    assert fails(findings) == []
+    assert [f.message for f in findings if f.severity == verify_pack.WARN] == [
+        "a block is exempted from citation by an explicit marker: "
+        "'framing, not a factual claim'"
+    ]
+
+
+def test_a_marker_inside_a_code_fence_is_not_reported(tmp_path):
+    pack = build.PACK_OK.replace(
+        "## Unverified & excluded",
+        "```\n<!-- no-citation: shown as an example -->\n```\n\n"
+        "## Unverified & excluded",
+    )
+    ctx = verify_pack.load_context(build.make_workspace(tmp_path, pack=pack))
+    assert verify_pack.check_uncited_prose(ctx) == []
+
+
 def test_explicit_no_citation_marker_exempts_a_paragraph(tmp_path):
     pack = build.PACK_OK.replace(
         "## Unverified & excluded",
