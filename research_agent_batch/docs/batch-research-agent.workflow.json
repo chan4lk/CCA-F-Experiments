@@ -1,0 +1,309 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Batch Research Agent \u2014 Phase Machine and Round Loop",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "phases",
+      "label": "Phase machine"
+    },
+    {
+      "id": "rounds",
+      "label": "Inside every wave"
+    },
+    {
+      "id": "evidence",
+      "label": "Evidence and approval",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "gather",
+      "label": "Gather",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "verify",
+      "label": "Verify twice",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "decide",
+      "label": "Write and approve",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "groups": [
+    {
+      "id": "roundloop",
+      "label": "One batch per round",
+      "lane": "rounds",
+      "fromCol": 1,
+      "toCol": 2,
+      "variant": "emphasis"
+    }
+  ],
+  "mainPath": [
+    "plan",
+    "research",
+    "validate",
+    "escalate",
+    "synth",
+    "gate",
+    "human"
+  ],
+  "semanticChecks": {
+    "allowedRoots": [
+      "plan"
+    ],
+    "allowedTerminals": [
+      "human",
+      "state"
+    ],
+    "requiredEdges": [
+      {
+        "from": "gate",
+        "to": "human"
+      },
+      {
+        "from": "tools",
+        "to": "ledger"
+      }
+    ],
+    "requiredPaths": [
+      {
+        "from": "plan",
+        "to": "human"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "plan",
+      "lane": "phases",
+      "col": 0,
+      "type": "backend",
+      "label": "Planner",
+      "sublabel": "6-12 sub-questions",
+      "tag": "sonnet",
+      "width": 136
+    },
+    {
+      "id": "research",
+      "lane": "phases",
+      "col": 1,
+      "type": "backend",
+      "label": "Researcher Wave",
+      "sublabel": "one per sub-question",
+      "tag": "sonnet",
+      "width": 136
+    },
+    {
+      "id": "validate",
+      "lane": "phases",
+      "col": 2,
+      "type": "backend",
+      "label": "Validator Wave",
+      "sublabel": "one per claim, blind",
+      "tag": "haiku",
+      "width": 136
+    },
+    {
+      "id": "escalate",
+      "lane": "phases",
+      "col": 3,
+      "type": "backend",
+      "label": "Escalation",
+      "sublabel": "material claims, 2nd model",
+      "tag": "sonnet",
+      "width": 136
+    },
+    {
+      "id": "synth",
+      "lane": "phases",
+      "col": 4,
+      "type": "backend",
+      "label": "Synthesizer",
+      "sublabel": "no tools, ledger inline",
+      "tag": "fable",
+      "width": 136
+    },
+    {
+      "id": "gate",
+      "lane": "phases",
+      "col": 5,
+      "type": "security",
+      "label": "The Gate",
+      "sublabel": "8 checks, blocks the vault",
+      "width": 136
+    },
+    {
+      "id": "submit",
+      "lane": "rounds",
+      "col": 1,
+      "type": "messagebus",
+      "label": "Batches API",
+      "sublabel": "half price, minutes to 24h",
+      "brand": "anthropic",
+      "width": 136
+    },
+    {
+      "id": "tools",
+      "lane": "rounds",
+      "col": 2,
+      "type": "backend",
+      "label": "Run Tools Here",
+      "sublabel": "web_search and web_fetch",
+      "tag": "stop_reason: tool_use",
+      "width": 136
+    },
+    {
+      "id": "state",
+      "lane": "evidence",
+      "col": 1,
+      "type": "database",
+      "label": "batch-state.json",
+      "sublabel": "phase + every conversation",
+      "width": 136
+    },
+    {
+      "id": "ledger",
+      "lane": "evidence",
+      "col": 3,
+      "type": "database",
+      "label": "Append-only Ledgers",
+      "sublabel": "claims, verdicts, fetch log",
+      "width": 136
+    },
+    {
+      "id": "human",
+      "lane": "evidence",
+      "col": 5,
+      "type": "security",
+      "label": "Human Gate",
+      "sublabel": "approve before drafting",
+      "width": 136
+    }
+  ],
+  "edges": [
+    {
+      "id": "plan-research",
+      "from": "plan",
+      "to": "research",
+      "variant": "emphasis"
+    },
+    {
+      "id": "research-validate",
+      "from": "research",
+      "to": "validate",
+      "variant": "emphasis"
+    },
+    {
+      "id": "validate-escalate",
+      "from": "validate",
+      "to": "escalate",
+      "label": "material only",
+      "variant": "emphasis"
+    },
+    {
+      "id": "escalate-synth",
+      "from": "escalate",
+      "to": "synth",
+      "variant": "emphasis"
+    },
+    {
+      "id": "synth-gate",
+      "from": "synth",
+      "to": "gate",
+      "variant": "emphasis"
+    },
+    {
+      "id": "gate-human",
+      "from": "gate",
+      "to": "human",
+      "label": "PASS only",
+      "variant": "security"
+    },
+    {
+      "id": "wave-submit",
+      "from": "research",
+      "to": "submit",
+      "label": "every active agent, one batch",
+      "variant": "default",
+      "role": "branch"
+    },
+    {
+      "id": "submit-tools",
+      "from": "submit",
+      "to": "tools",
+      "label": "asks for a tool",
+      "variant": "default",
+      "role": "branch"
+    },
+    {
+      "id": "tools-wave",
+      "from": "tools",
+      "to": "research",
+      "label": "results fold in, next round",
+      "variant": "dashed",
+      "role": "return"
+    },
+    {
+      "id": "submit-state",
+      "from": "submit",
+      "to": "state",
+      "label": "saved every round",
+      "variant": "dashed"
+    },
+    {
+      "id": "tools-ledger",
+      "from": "tools",
+      "to": "ledger",
+      "label": "logged where it happens",
+      "variant": "dashed"
+    },
+    {
+      "id": "ledger-gate",
+      "from": "ledger",
+      "to": "gate",
+      "label": "proves the page was read",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Why there is a loop at all",
+      "items": [
+        "A batch request is one Messages call: it returns stop_reason tool_use and stops",
+        "So this process runs the tool and resubmits; nine researchers x six turns is six batches"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "What the gate can prove",
+      "items": [
+        "A material claim needs two CONFIRMED rulings from two validators on two models",
+        "A validator fetches only the cited URL's host, so it cannot shop for a friendlier source",
+        "A cited page absent from the fetch log is the signature of a fabricated citation"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Not drawn",
+      "items": [
+        "Gap Hunter (opus) reviews the claim set after escalation and can send one more research round, at most two",
+        "After the human approves, proposal-writer drafts and the same gate re-runs over the draft"
+      ]
+    }
+  ]
+}
