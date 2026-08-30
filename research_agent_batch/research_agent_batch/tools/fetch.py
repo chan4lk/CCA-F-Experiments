@@ -5,13 +5,30 @@ retrieval, provenance is a direct observation rather than something recovered
 from a hook, and a validator's reach can be pinned to a single host in code:
 `allowed_domains` is not advice to the model, it is a check before the socket
 opens.
+
+It is also the part that makes this process the one holding the socket, which is
+a responsibility the server-side port does not have. Two rules follow, and both
+are enforced on **every hop** rather than once on the URL the model supplied:
+
+**Redirects do not launder a destination.** The client does not follow redirects
+itself. Each `Location` is resolved here and re-checked from the top, so a
+redirect off a validator's pinned host is refused rather than followed — and the
+page the model ends up reading is the page it was allowed to read.
+
+**The private network is not the web.** The fetch URL is model-chosen, and the
+model's choices come from pages it just read off the open web, so a prompt
+injection on any of them is a path to `169.254.169.254` or `127.0.0.1`. Every
+host is resolved and rejected unless every address it answers with is global.
 """
 from __future__ import annotations
 
 import io
+import ipaddress
 import re
+import socket
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from typing import Any
+from urllib.parse import urljoin, urlparse
 
 import httpx2
 
@@ -36,6 +53,11 @@ DEFINITION = {
 
 USER_AGENT = "research-agent-batch/0.1 (+proposal research; contact via repo)"
 
+# A redirect chain longer than this is a loop or a crawler trap, not a document.
+MAX_REDIRECTS = 5
+
+REDIRECT_CODES = {301, 302, 303, 307, 308}
+
 _TAG = re.compile(r"<(script|style)\b.*?</\1>", re.DOTALL | re.IGNORECASE)
 _MARKUP = re.compile(r"<[^>]+>")
 _BLANK = re.compile(r"\n{3,}")
@@ -52,6 +74,10 @@ class Fetched:
     text: str
     content_type: str = ""
     error: str = ""
+    # The URL the body actually came from. Differs from `url` when a redirect
+    # was followed, and the provenance log records both — a row naming only the
+    # requested URL would say the run read a page it did not read.
+    final_url: str = ""
 
 
 def host_of(url: str) -> str:
@@ -68,6 +94,66 @@ def domain_allowed(url: str, allowed: list[str] | None) -> bool:
         return True
     host = host_of(url)
     return any(host == a.lower() or host.endswith("." + a.lower()) for a in allowed)
+
+
+# --- the private network is not the web -----------------------------------
+
+def _resolve(host: str) -> list[str]:
+    """Every address `host` answers with. Overridable so the guard is testable
+    without a network and without a DNS server that agrees with the test."""
+    return [str(info[4][0]) for info in socket.getaddrinfo(host, None)]
+
+
+def host_is_public(host: str, resolve=None) -> bool:
+    """True only when every address `host` resolves to is globally routable.
+
+    Every address, not the first: a host that answers with one public address
+    and one loopback address is a bypass, not a partial success.
+
+    This is a resolve-then-connect check, so it does not close DNS rebinding —
+    a name that answers differently on the second lookup can still move. That
+    needs pinning the resolved address into the connection, which httpx2 does
+    not expose here. It does close the reachable case: a model-chosen URL, or a
+    redirect to one, naming a private or loopback destination outright.
+    """
+    resolve = resolve or _resolve
+    if not host:
+        return False
+    try:
+        addresses = resolve(host)
+    except OSError:
+        return False
+    if not addresses:
+        return False
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        # is_global is false for loopback, link-local (169.254.169.254 included),
+        # RFC1918, multicast, reserved and unspecified addresses alike.
+        if not ip.is_global:
+            return False
+    return True
+
+
+def refusal_for(url: str, allowed: list[str] | None, resolve=None) -> str:
+    """Why `url` may not be fetched, or "" when it may.
+
+    Called once per hop rather than once per fetch. A redirect is a new
+    destination and gets the same scrutiny as the one the model asked for.
+    """
+    if not url or not url.startswith(("http://", "https://")):
+        return "url must be an http(s) URL"
+    if not domain_allowed(url, allowed):
+        return (f"{host_of(url)} is outside the domains you may fetch "
+                f"({', '.join(allowed or []) or 'none'}). You were given one page to "
+                f"read; fetch that page. Finding a different source is not your job.")
+    if not host_is_public(host_of(url), resolve):
+        return (f"{host_of(url)} is not a public internet host, so it will not be "
+                f"retrieved. Private, loopback and link-local addresses are not "
+                f"sources.")
+    return ""
 
 
 def html_to_text(html: str) -> str:
@@ -99,54 +185,73 @@ def pdf_to_text(body: bytes) -> str:
 
 
 def fetch(url: str, allowed_domains: list[str] | None = None,
-          client: object | None = None) -> Fetched:
+          client: Any = None, resolve=None) -> Fetched:
     """Retrieve one URL. Never raises: a failure is a result the model can act on.
 
     A tool that throws ends the agent's turn with an API error; a tool that
     returns "I could not read this" lets a validator rule NOT_FOUND, which is a
     correct and useful answer.
+
+    Redirects are followed here rather than by the client, because the checks
+    have to run *before* each hop is requested. Checking `response.history`
+    afterwards would mean the request to the disallowed host had already been
+    made, which for an internal address is the whole of the damage.
     """
-    if not url or not url.startswith(("http://", "https://")):
-        return Fetched(url, False, "", error="url must be an http(s) URL")
+    target = url
+    for _ in range(MAX_REDIRECTS + 1):
+        refusal = refusal_for(target, allowed_domains, resolve)
+        if refusal:
+            return Fetched(url, False, "", error=refusal)
 
-    if not domain_allowed(url, allowed_domains):
-        return Fetched(url, False, "", error=(
-            f"{host_of(url)} is outside the domains you may fetch "
-            f"({', '.join(allowed_domains or []) or 'none'}). You were given one page to "
-            f"read; fetch that page. Finding a different source is not your job."))
+        try:
+            response = _get(target, client)
+        except Exception as exc:  # noqa: BLE001 — network failure is a verdict, not a crash
+            return Fetched(url, False, "",
+                           error=f"could not retrieve: {type(exc).__name__}: {exc}")
 
-    try:
-        response = _get(url, client)
-    except Exception as exc:  # noqa: BLE001 — network failure is a verdict, not a crash
-        return Fetched(url, False, "", error=f"could not retrieve: {type(exc).__name__}: {exc}")
+        location = response.headers.get("location") if _is_redirect(response) else None
+        if not location:
+            return _read(url, target, response)
+        target = urljoin(target, location)
 
+    return Fetched(url, False, "", error=f"more than {MAX_REDIRECTS} redirects")
+
+
+def _is_redirect(response) -> bool:
+    return getattr(response, "status_code", 0) in REDIRECT_CODES
+
+
+def _read(requested: str, final: str, response) -> Fetched:
     if response.status_code >= 400:
-        return Fetched(url, False, "", error=f"HTTP {response.status_code}")
+        return Fetched(requested, False, "", error=f"HTTP {response.status_code}",
+                       final_url=final)
 
     content_type = (response.headers.get("content-type") or "").split(";")[0].strip()
     body = response.content[:MAX_FETCH_BYTES]
 
     try:
-        if "pdf" in content_type or url.lower().endswith(".pdf"):
+        if "pdf" in content_type or final.lower().endswith(".pdf"):
             text = pdf_to_text(body)
         else:
             text = html_to_text(body.decode("utf-8", errors="replace"))
     except ValueError as exc:
-        return Fetched(url, False, "", content_type, str(exc))
+        return Fetched(requested, False, "", content_type, str(exc), final)
 
     if not text.strip():
-        return Fetched(url, False, "", content_type,
-                       "the page returned no readable text")
+        return Fetched(requested, False, "", content_type,
+                       "the page returned no readable text", final)
 
     truncated = text[:MAX_TEXT_CHARS]
     if len(text) > MAX_TEXT_CHARS:
         truncated += f"\n\n[truncated at {MAX_TEXT_CHARS:,} characters]"
-    return Fetched(url, True, truncated, content_type)
+    return Fetched(requested, True, truncated, content_type, final_url=final)
 
 
-def _get(url: str, client: object | None):
+def _get(url: str, client: Any):
     if client is not None:
         return client.get(url)
-    with httpx2.Client(follow_redirects=True, timeout=FETCH_TIMEOUT_SECONDS,
+    # follow_redirects=False on purpose: see fetch(). The client must not reach a
+    # host this module has not cleared.
+    with httpx2.Client(follow_redirects=False, timeout=FETCH_TIMEOUT_SECONDS,
                        headers={"User-Agent": USER_AGENT}) as http:
         return http.get(url)

@@ -159,10 +159,15 @@ class FakeClient:
 # --- an HTTP stub for the client-side tools -------------------------------
 
 class FakeResponse:
-    def __init__(self, body: bytes, content_type="text/html", status=200):
+    def __init__(self, body: bytes, content_type="text/html", status=200,
+                 location=None):
         self.content = body
         self.status_code = status
         self.headers = {"content-type": content_type}
+        if location:
+            # A redirect the caller is expected to resolve itself: fetch()
+            # follows hops by hand so it can re-check each one.
+            self.headers["location"] = location
 
     @property
     def text(self):

@@ -218,3 +218,185 @@ def test_an_unknown_tool_is_an_error_result_not_a_crash():
     outcome = execute("rm_rf", {}, http=FakeHTTP())
     assert outcome.is_error and "No such tool" in outcome.content
     assert outcome.retrievals == []
+
+
+# --- the grant is checked here too, not only in the request ---------------
+
+def test_a_tool_outside_the_grant_is_refused():
+    """The name in a tool_use block is model-supplied. In normal operation a
+    validator is never offered web_search, but a dispatcher that runs whatever
+    it is named is one enforcement layer, and the design claims two."""
+    outcome = execute("web_search", {"query": "cap"},
+                      granted=["web_fetch"], http=FakeHTTP())
+    assert outcome.is_error
+    assert "not one of your tools" in outcome.content
+    assert outcome.retrievals == []
+
+
+def test_a_refused_tool_never_runs():
+    """Refusing after the search has happened would leave the model told 'no'
+    and the query already sent."""
+    http = FakeHTTP()
+    execute("web_search", {"query": "cap"}, granted=["web_fetch"], http=http)
+    assert http.requested == []
+
+
+def test_a_granted_tool_runs():
+    outcome = execute("web_fetch", {"url": MS}, granted=["web_fetch"], http=FakeHTTP())
+    assert not outcome.is_error
+    assert [r.tool for r in outcome.retrievals] == ["web_fetch"]
+
+
+def test_an_empty_grant_permits_nothing():
+    """An agent with no tools is not an agent with every tool."""
+    assert execute("web_fetch", {"url": MS}, granted=[], http=FakeHTTP()).is_error
+
+
+def test_no_grant_means_unrestricted_for_direct_calls():
+    """`None` and `[]` are different states here for the same reason they are in
+    domain_allowed."""
+    assert not execute("web_fetch", {"url": MS}, granted=None, http=FakeHTTP()).is_error
+
+
+# --- the private network is not the web -----------------------------------
+
+def only(address):
+    return lambda _host: [address]
+
+
+@pytest.mark.parametrize("address,what", [
+    ("127.0.0.1", "loopback"),
+    ("169.254.169.254", "the cloud metadata endpoint"),
+    ("10.0.0.5", "RFC1918"),
+    ("192.168.1.1", "RFC1918"),
+    ("172.16.0.1", "RFC1918"),
+    ("0.0.0.0", "unspecified"),
+    ("::1", "IPv6 loopback"),
+    ("fd00::1", "IPv6 unique-local"),
+])
+def test_an_internal_destination_is_refused(address, what):
+    """The fetch URL is model-chosen and the model's choices come from pages it
+    just read off the open web, so a prompt injection on any of them is a path
+    to this address."""
+    result = fetch("https://internal.example/x", None, FakeHTTP(), resolve=only(address))
+    assert not result.ok, what
+    assert "not a public internet host" in result.error
+
+
+def test_an_internal_destination_never_opens_a_socket():
+    http = FakeHTTP()
+    fetch("https://internal.example/x", None, http, resolve=only("169.254.169.254"))
+    assert http.requested == []
+
+
+def test_a_public_destination_is_fetched():
+    result = fetch(MS, None, FakeHTTP(), resolve=only("93.184.216.34"))
+    assert result.ok
+
+
+def test_one_private_address_among_public_ones_is_refused():
+    """Every address, not the first. A host answering with both is a bypass, not
+    a partial success."""
+    result = fetch(MS, None, FakeHTTP(),
+                   resolve=lambda _host: ["93.184.216.34", "127.0.0.1"])
+    assert not result.ok and "not a public internet host" in result.error
+
+
+def test_a_host_that_does_not_resolve_is_refused():
+    def broken(_host):
+        raise OSError("NXDOMAIN")
+    assert not fetch(MS, None, FakeHTTP(), resolve=broken).ok
+
+
+def test_a_literal_private_ip_in_the_url_is_refused():
+    """No DNS involved; the guard still has to see it."""
+    result = fetch("http://127.0.0.1:8080/admin", None, FakeHTTP(),
+                   resolve=lambda host: [host])
+    assert not result.ok and "not a public internet host" in result.error
+
+
+# --- redirects do not launder a destination -------------------------------
+
+def redirect(to, status=302):
+    return FakeResponse(b"", status=status, location=to)
+
+
+PAGE = FakeResponse(b"<p>A maximum of 10 tools is supported.</p>")
+
+
+def test_a_redirect_is_followed_and_the_final_url_recorded():
+    http = FakeHTTP(pages={MS: redirect("https://learn.microsoft.com/copilot/limits2"),
+                           "https://learn.microsoft.com/copilot/limits2": PAGE})
+    result = fetch(MS, None, http, resolve=only("93.184.216.34"))
+    assert result.ok
+    assert result.final_url == "https://learn.microsoft.com/copilot/limits2"
+
+
+def test_a_redirect_off_the_pinned_host_is_refused():
+    """The validator's one independence guarantee. A redirect that escaped it
+    would have the validator ruling on a page it was never allowed to read."""
+    http = FakeHTTP(pages={MS: redirect("https://evil.example/copy")})
+    result = fetch(MS, ["learn.microsoft.com"], http, resolve=only("93.184.216.34"))
+    assert not result.ok
+    assert "outside the domains you may fetch" in result.error
+
+
+def test_a_refused_redirect_target_is_never_requested():
+    """Checking response.history after the fact would mean the request to the
+    disallowed host had already been made — which for an internal address is the
+    whole of the damage."""
+    http = FakeHTTP(pages={MS: redirect("https://evil.example/copy")})
+    fetch(MS, ["learn.microsoft.com"], http, resolve=only("93.184.216.34"))
+    assert "https://evil.example/copy" not in http.requested
+
+
+def test_a_redirect_to_a_private_address_is_refused():
+    http = FakeHTTP(pages={MS: redirect("http://169.254.169.254/latest/meta-data/")})
+    result = fetch(MS, None, http,
+                   resolve=lambda host: ["93.184.216.34"] if "microsoft" in host
+                   else ["169.254.169.254"])
+    assert not result.ok and "not a public internet host" in result.error
+
+
+def test_a_redirect_within_the_pinned_host_is_followed():
+    """The pin is a host, not a URL. A vendor doc moving to a regional path is
+    the normal case and must not be refused."""
+    moved = "https://learn.microsoft.com/en-us/copilot/limits"
+    http = FakeHTTP(pages={MS: redirect(moved), moved: PAGE})
+    result = fetch(MS, ["learn.microsoft.com"], http, resolve=only("93.184.216.34"))
+    assert result.ok and result.final_url == moved
+
+
+def test_a_relative_redirect_is_resolved_against_the_current_url():
+    moved = "https://learn.microsoft.com/copilot/limits-v2"
+    http = FakeHTTP(pages={MS: redirect("/copilot/limits-v2"), moved: PAGE})
+    result = fetch(MS, ["learn.microsoft.com"], http, resolve=only("93.184.216.34"))
+    assert result.ok and result.final_url == moved
+
+
+def test_a_redirect_loop_ends_rather_than_hanging():
+    http = FakeHTTP(default=redirect(MS))
+    result = fetch(MS, None, http, resolve=only("93.184.216.34"))
+    assert not result.ok and "redirects" in result.error
+
+
+def test_a_redirect_logs_both_the_requested_and_the_final_url():
+    """The gate proves a page was retrieved by joining on this log. A row naming
+    only the requested URL would claim a page was read that was not."""
+    moved = "https://learn.microsoft.com/en-us/copilot/limits"
+    http = FakeHTTP(pages={MS: redirect(moved), moved: PAGE})
+    outcome = execute("web_fetch", {"url": MS}, http=http)
+    assert [r.url for r in outcome.retrievals] == [MS, moved]
+
+
+def test_an_unredirected_fetch_logs_one_url():
+    outcome = execute("web_fetch", {"url": MS}, http=FakeHTTP())
+    assert [r.url for r in outcome.retrievals] == [MS]
+
+
+def test_a_failed_fetch_logs_nothing():
+    """A row for a page that could not be read would let the gate pass a
+    citation to it."""
+    outcome = execute("web_fetch", {"url": MS},
+                      http=FakeHTTP(default=FakeResponse(b"", status=404)))
+    assert outcome.is_error and outcome.retrievals == []

@@ -877,3 +877,45 @@ def test_report_omits_context_economics_when_nothing_was_logged(tmp_path):
     stats = verify_pack.collect_stats(ctx)
     assert stats["context"] is None
     assert "Context economics" not in verify_pack.render_report([], stats, True)
+
+
+def test_the_restriction_check_fires_on_a_row_this_engine_actually_writes(tmp_path):
+    """The regression that made this check dead code for its whole life.
+
+    It compared against `WebSearch`, the Agent SDK plugin's spelling, while the
+    only writer in this repo emits `web_search` — so a validator that searched
+    passed the gate every time. The fixtures above hid it by hand-writing the
+    spelling the check expected rather than the one the runtime produces, so
+    this test goes through `provenance.record` instead of writing rows itself.
+    """
+    from research_agent_batch import provenance
+    from research_agent_batch.tools import Retrieval
+
+    ws = build.make_workspace(tmp_path, fetches=build.FETCHES_OK)
+    provenance.record(ws, "p3-validator-C001-a", "validator",
+                      [Retrieval("web_search", query="a friendlier source")])
+
+    findings = fails(verify_pack.check_validator_tool_restrictions(
+        verify_pack.load_context(ws)))
+    assert [f.check for f in findings] == ["validator-tool-restrictions"]
+    assert "p3-validator-C001-a" in findings[0].message
+
+
+def test_a_researchers_real_search_row_is_still_fine(tmp_path):
+    from research_agent_batch import provenance
+    from research_agent_batch.tools import Retrieval
+
+    ws = build.make_workspace(tmp_path, fetches=build.FETCHES_OK)
+    provenance.record(ws, "p2r0-researcher-Q1", "researcher",
+                      [Retrieval("web_search", query="mcp tool limit")])
+    assert fails(verify_pack.check_validator_tool_restrictions(
+        verify_pack.load_context(ws))) == []
+
+
+def test_the_check_holds_for_either_writers_spelling():
+    """The log has had two writers. Normalising means neither spelling is a
+    silent pass."""
+    assert verify_pack.tool_key("WebSearch") == verify_pack.tool_key("web_search")
+    assert verify_pack.tool_key("WebFetch") == verify_pack.tool_key("web_fetch")
+    assert verify_pack.tool_key("web_search") != verify_pack.tool_key("web_fetch")
+    assert verify_pack.tool_key(None) == ""
