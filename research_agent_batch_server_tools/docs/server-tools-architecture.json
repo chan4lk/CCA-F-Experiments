@@ -1,0 +1,356 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Proposal research on the Batches API, with the tools on the server",
+    "output": "server-tools-architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "outbound",
+        "label": "One batch per phase",
+        "focus": [
+          "cli",
+          "orchestrator",
+          "grants",
+          "batches",
+          "servertools",
+          "web"
+        ],
+        "note": "A whole phase leaves as one batch. The searching and fetching happen inside those requests."
+      },
+      {
+        "id": "provenance",
+        "label": "Where the fetch log comes from",
+        "focus": [
+          "batches",
+          "task",
+          "provenance",
+          "ledger"
+        ],
+        "note": "Retrieval rows are read out of the response's own result blocks, not written by this process."
+      },
+      {
+        "id": "gate",
+        "label": "The gate and the artefacts",
+        "focus": [
+          "ledger",
+          "gate",
+          "vault",
+          "state"
+        ],
+        "note": "Eight checks over the ledger. A failing gate raises and no vault is built."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "CLI",
+      "sublabel": "research · resume",
+      "pos": [
+        60,
+        100
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "orchestrator",
+      "type": "backend",
+      "label": "Phase machine",
+      "sublabel": "orchestrator.py — tick()",
+      "tag": "step function",
+      "pos": [
+        400,
+        100
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "grants",
+      "type": "security",
+      "label": "Tool grants",
+      "sublabel": "servertools.py",
+      "tag": "allowed_domains pin",
+      "pos": [
+        740,
+        100
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "batch-state.json",
+      "sublabel": "phase · batch id · tasks",
+      "pos": [
+        400,
+        270
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "batches",
+      "type": "cloud",
+      "label": "Message Batches API",
+      "sublabel": "up to 24h · 50% of list",
+      "pos": [
+        740,
+        270
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "servertools",
+      "type": "cloud",
+      "label": "web_search · web_fetch",
+      "sublabel": "Anthropic-hosted tools",
+      "tag": "$10 / 1k searches",
+      "pos": [
+        1080,
+        270
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "web",
+      "type": "external",
+      "label": "The open web",
+      "sublabel": "vendor docs · PDFs",
+      "pos": [
+        1080,
+        440
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "task",
+      "type": "backend",
+      "label": "Task",
+      "sublabel": "task.py — one request",
+      "tag": "pause_turn only",
+      "pos": [
+        740,
+        440
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "provenance",
+      "type": "backend",
+      "label": "Provenance",
+      "sublabel": "provenance.py",
+      "pos": [
+        400,
+        440
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "ledger",
+      "type": "database",
+      "label": "Ledger",
+      "sublabel": "claims · verdicts · fetches",
+      "pos": [
+        400,
+        610
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "The gate",
+      "sublabel": "gate/verify.py — 8 checks",
+      "tag": "FAIL ⇒ no vault",
+      "pos": [
+        740,
+        610
+      ],
+      "size": [
+        200,
+        60
+      ]
+    },
+    {
+      "id": "vault",
+      "type": "database",
+      "label": "Pack + Obsidian vault",
+      "sublabel": "the delivered artefacts",
+      "pos": [
+        1080,
+        610
+      ],
+      "size": [
+        200,
+        60
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Anthropic — hosted",
+      "wraps": [
+        "batches",
+        "servertools"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "operator-drives",
+      "from": "cli",
+      "to": "orchestrator",
+      "label": "research / resume",
+      "variant": "emphasis"
+    },
+    {
+      "id": "assemble-wave",
+      "from": "orchestrator",
+      "to": "grants",
+      "label": "one request per agent"
+    },
+    {
+      "id": "persist-run",
+      "from": "orchestrator",
+      "to": "state",
+      "label": "resume reads this back",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "submit-phase",
+      "from": "grants",
+      "to": "batches",
+      "label": "one batch per phase",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "tools-run-inside",
+      "from": "batches",
+      "to": "servertools",
+      "label": "runs inside the request"
+    },
+    {
+      "id": "retrieve",
+      "from": "servertools",
+      "to": "web",
+      "label": "HTTPS search + fetch",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "answered",
+      "from": "batches",
+      "to": "task",
+      "label": "answered message",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "read-retrievals",
+      "from": "task",
+      "to": "provenance",
+      "label": "web_fetch_result blocks",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "record-claims",
+      "from": "task",
+      "to": "ledger",
+      "label": "parsed claims + verdicts",
+      "fromSide": "bottom",
+      "toSide": "right"
+    },
+    {
+      "id": "record-fetches",
+      "from": "provenance",
+      "to": "ledger",
+      "label": "fetch-log.jsonl",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "verify",
+      "from": "ledger",
+      "to": "gate",
+      "label": "joins claims to fetches",
+      "labelDy": 20
+    },
+    {
+      "id": "build-vault",
+      "from": "gate",
+      "to": "vault",
+      "label": "only on PASS",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The loop is gone, not rebuilt",
+      "items": [
+        "A server tool never stops the turn, so a request comes back answered",
+        "A phase is one batch; pause_turn is the only continuation"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Restrictions moved upstream",
+      "items": [
+        "A validator's web_fetch is pinned to the cited page's host",
+        "Validators hold no web_search, so there is nothing to be talked into"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Provenance is read, not written",
+      "items": [
+        "Rows come from the response's own web_fetch_tool_result blocks",
+        "The fetcher's account, not the model's — it cannot forge one"
+      ]
+    }
+  ]
+}
