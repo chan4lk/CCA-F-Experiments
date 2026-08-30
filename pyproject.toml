@@ -9,3 +9,9 @@ dependencies = [
     "claude-agent-sdk>=0.2.144",
     "dotenv>=0.9.9",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
