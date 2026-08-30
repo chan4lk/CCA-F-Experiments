@@ -268,16 +268,36 @@ def check_validator_blindness(ctx: Context) -> list[Finding]:
     return findings
 
 
+def tool_key(tool: str | None) -> str:
+    """A fetch-log tool name, normalised for comparison.
+
+    The log has had two writers with two naming conventions: the Agent SDK
+    plugin recorded `WebSearch` and `WebFetch`, and both batch engines record
+    `web_search` and `web_fetch`. A check written against one spelling passed
+    every row written by the other without ever saying so — which is how
+    `check_validator_tool_restrictions` came to be dead code that its own tests
+    reported as working, because the fixtures used the spelling the check
+    expected rather than the one the runtime produces.
+
+    Comparing on the normalised name means the check holds whichever writer
+    filled the log.
+    """
+    return re.sub(r"[^a-z]", "", (tool or "").lower())
+
+
 def check_validator_tool_restrictions(ctx: Context) -> list[Finding]:
     """Validators must not search. Searching means shopping for a friendlier source."""
     findings = []
     for row in ctx.fetches:
-        if agent_role(row.get("agent_type")) == "validator" and row.get("tool") == "WebSearch":
-            findings.append(Finding(
-                "validator-tool-restrictions", FAIL,
-                f"validator {row.get('agent_id')} called WebSearch "
-                f"(query={row.get('query')!r}); validators must only fetch the cited URL",
-            ))
+        if agent_role(row.get("agent_type")) != "validator":
+            continue
+        if tool_key(row.get("tool")) != "websearch":
+            continue
+        findings.append(Finding(
+            "validator-tool-restrictions", FAIL,
+            f"validator {row.get('agent_id')} called {row.get('tool')} "
+            f"(query={row.get('query')!r}); validators must only fetch the cited URL",
+        ))
     return findings
 
 

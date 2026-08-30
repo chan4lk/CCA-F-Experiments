@@ -130,7 +130,12 @@ class Conversation:
         results, retrievals = [], []
         for call in calls:
             outcome = execute(call.get("name", ""), call.get("input") or {},
-                              allowed_domains=self.allowed_domains, http=http)
+                              allowed_domains=self.allowed_domains,
+                              # This conversation's own grant. The name in a
+                              # tool_use block is model-supplied; the request's
+                              # tools array is not.
+                              granted=[t.get("name", "") for t in self.tools],
+                              http=http)
             retrievals.extend(outcome.retrievals)
             results.append({
                 "type": "tool_result",

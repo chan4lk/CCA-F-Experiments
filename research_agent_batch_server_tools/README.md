@@ -237,7 +237,7 @@ There is no `tools/` directory. That is the port.
 pytest        # from research_agent_batch_server_tools/
 ```
 
-473 tests. 280 are the plugin's original suite, vendored with the ledger, gate, vault and
+476 tests. 280 are the plugin's original suite, vendored with the ledger, gate, vault and
 ingest code and passing unchanged. The rest cover what this engine adds and what it removes:
 the grants and their two variants, the domain pin, the flags that must never be set, reading
 retrievals back out of a response, the `pause_turn` continuation, batch assembly and failure

@@ -66,7 +66,16 @@ the log and failed every claim an hour later. Here a row is written when the soc
 **Blindness is enforced before the request, not asked for in prose.** A validator's
 `web_fetch` is pinned to the cited URL's host; anything else comes back refused, and nothing
 is retrieved, so nothing is logged. It is given no `web_search` at all — searching is how a
-validator finds a friendlier source than the one it was asked about.
+validator finds a friendlier source than the one it was asked about, and the dispatcher
+refuses a tool outside the caller's grant even if the model asks for one by name.
+
+Holding the socket is also a responsibility. Redirects are followed here rather than by the
+HTTP client, so every hop is re-checked before it is requested — a redirect off a validator's
+pinned host is refused rather than followed. And because the fetch URL is model-chosen and the
+model's choices come from pages it just read off the open web, every host is resolved and
+rejected unless every address it answers with is globally routable: `127.0.0.1`,
+`169.254.169.254` and RFC1918 are not sources. That is a resolve-then-connect check, so it does
+not close DNS rebinding; it does close the reachable case.
 
 **A PDF is just bytes.** 57% of the claims in the plugin's first real run cited PDFs, and
 `WebFetch` cannot decode one — which is the entire reason its validator had to hold `Bash`,
@@ -170,7 +179,7 @@ research_agent_batch/
 pytest        # from research_agent_batch/
 ```
 
-444 tests. 280 are the plugin's original suite, vendored with the ledger, gate, vault and
-ingest code and passing unchanged. The other 164 cover what this engine adds: the client-side
+480 tests. 280 are the plugin's original suite, vendored with the ledger, gate, vault and
+ingest code and passing unchanged. The other 200 cover what this engine adds: the client-side
 tools and their domain pinning, the round-per-batch loop, batch assembly and failure
 classification, the resumable state file, the phase machine, and the CLI.
