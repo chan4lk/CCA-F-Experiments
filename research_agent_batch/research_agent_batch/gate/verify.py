@@ -268,17 +268,12 @@ def check_validator_blindness(ctx: Context) -> list[Finding]:
     return findings
 
 
-def check_validator_tool_restrictions(ctx: Context) -> list[Finding]:
-    """Validators must not search. Searching means shopping for a friendlier source."""
-    findings = []
-    for row in ctx.fetches:
-        if agent_role(row.get("agent_type")) == "validator" and row.get("tool") == "WebSearch":
+        if agent_role(row.get("agent_type")) == "validator" and row.get("tool") == "web_search":
             findings.append(Finding(
                 "validator-tool-restrictions", FAIL,
-                f"validator {row.get('agent_id')} called WebSearch "
+                f"validator {row.get('agent_id')} called web_search "
                 f"(query={row.get('query')!r}); validators must only fetch the cited URL",
             ))
-    return findings
 
 
 NO_CITATION_MARKER = "<!-- no-citation:"
