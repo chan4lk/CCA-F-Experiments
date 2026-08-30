@@ -19,6 +19,10 @@ python -m research_agent_batch resume     # collect, advance, submit the next ro
 python -m research_agent_batch resume --wait   # or sit and poll until it blocks
 ```
 
+**Diagram:** [`docs/batch-research-agent.html`](docs/batch-research-agent.html) — the phase
+machine and the round loop as one explorable page (open it in a browser). Its source spec is
+[`docs/batch-research-agent.workflow.json`](docs/batch-research-agent.workflow.json).
+
 ---
 
 ## The trade
