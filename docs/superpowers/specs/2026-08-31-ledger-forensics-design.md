@@ -56,6 +56,8 @@ that say "do not read PII" are not the mechanism.
 - **Ships no eFinancials-specific table names.** Everything physical is discovered and recorded
   in a per-installation `mapping.yaml`.
 - **Not a general-purpose SQL agent.** Read paths are narrow and governed by design.
+- **Node is never a hard dependency.** The Pi triage module (D12) is optional and
+  feature-flagged off; the plugin installs, tests and runs fully without a Node runtime.
 
 ## Decisions
 
@@ -74,6 +76,8 @@ Settled during brainstorming, recorded here so the implementation does not relit
 | D9 | **Detection defaults to a local DuckDB mirror** | Rule tuning is where most queries happen; it should cost the database nothing |
 | D10 | **Rules written against a canonical ontology, not physical tables** | Pattern library survives an eFinancials upgrade; unmapped entities become audit findings |
 | D11 | **No FIU cash-reporting threshold is hardcoded** | The figure must be sourced, not asserted from memory, in a control a regulator may read |
+| D12 | **Pi-orchestrated local SLM triage is an optional module, off by default** | Pi is an orchestrator, not a model. It adds a Node runtime to the zone holding raw PII, so it must be opt-in and the plugin must run fully without it |
+| D13 | **Local-only processing is proven, not asserted** | The requirement is demonstrability to a third party, which is an evidence problem distinct from the control problem. Hence `/lf:attest` and a reproducibility-based proof |
 
 ## Architecture
 
@@ -107,6 +111,10 @@ credentials cannot address it.
       |
 /lf:probe         probe.py (local SLM, Zone 1) -> probe-report.json
       |
+      +-- /lf:triage   OPTIONAL. Pi orchestrator + local SLM, Zone 1.
+      |                Multi-step triage over raw rows; emits de-identified
+      |                findings only. Off by default; skipped if absent.
+      |
 /lf:classify      pii-classifier -> classification.yaml (status: draft)
       |
    [HUMAN SIGN-OFF GATE]   approved_by + approved_at + schema_hash
@@ -125,6 +133,8 @@ credentials cannot address it.
 /lf:rings         ring-analyst -> shared-attribute graph, components, scores
       |
 /lf:findings      exception-triage -> workpapers, vault, dpia-input.md
+      |
+/lf:attest        attest.py -> attestation pack proving Zone 1 stayed local
 
 ccaf-deanon <token>    human-only CLI. Hook-denied to Claude. Every resolution logged.
 ```
@@ -244,6 +254,106 @@ Presidio-only plus full suppression of free text.
 
 Sizing note: the development machine is an M3 Pro / 18 GB, which accommodates the 8B
 comfortably when nothing else is resident.
+
+### Optional: Pi-orchestrated local triage
+
+**Status: optional module, feature-flagged off by default. Nothing else in the plugin
+depends on it, and the plugin must install, pass its full test suite and run end to end on a
+machine with no Node runtime present.**
+
+The baseline probe above is single-shot: one prompt per column, fixed JSON out, no tools.
+That is the right shape for classification, and it stays the default. But *triage* — "look at
+this cluster of rows and tell me which of them deserve a human" — is genuinely multi-step:
+sample, form a hypothesis, check it against another table, narrow, report. That is an agent
+loop, and it is worth having one on the trusted box, where it may look at real values.
+
+**The division of labour.** Pi is the orchestrator; the local SLM is the brain. Pi contributes
+session management, the tool loop and structured output; it contributes no intelligence and no
+model. All inference is local.
+
+```
+MACHINE / BOX (trusted, Zone 1)
+   Pi SDK  (orchestrator, tool loop)
+      |  models.json: baseUrl http://127.0.0.1:11434/v1, api openai-completions
+      v
+   Ollama  (the brain, pinned digest)
+      |
+   fixed local tool allowlist  ->  raw rows, never off the box
+      |
+   constrained JSON findings  ->  scrubbed  ->  Zone 2
+```
+
+**Why Pi can be trusted here despite being a coding agent.** `@earendil-works/pi-coding-agent`
+is a coding agent: its native shape is to take actions, including shell and file access. In
+the zone holding raw PII that is the wrong shape by default, so the module constrains it:
+
+1. **Fixed tool allowlist, no shell, no network.** Pi is given only tools we define:
+   `sample_rows`, `column_stats`, `check_pattern`, `emit_finding`. No shell tool, no file
+   write outside its scratch directory, no fetch tool. An orchestrator needs *some* tools —
+   this is a curated set, not an empty one, and not the default set.
+2. **No credentials in the environment.** The process runs under `env -i` with no `*_API_KEY`
+   present. Pi's default providers are Anthropic and OpenAI; with no key it cannot
+   authenticate to either even if a code path tried. This is the control that makes the
+   cloud-by-default posture inert.
+3. **Loopback-only model resolution.** `models.json` pins `baseUrl` to `127.0.0.1`;
+   `model_guard` and `slm.py`'s existing checks apply unchanged. Any non-loopback host or
+   `:cloud` tag is denied.
+4. **No egress route.** Where the box is air-gapped, this is physics. Where it is not, the
+   process runs with all outbound blocked and the block logged — the log being the evidence.
+5. **Output is constrained and scrubbed.** Findings are schema-validated JSON, then passed
+   through the L3.5 output scrub before reaching Zone 2. Identical treatment to `probe.py`;
+   the optional module gets no exemption from the boundary.
+6. **Vendored dependencies.** `node_modules` is vendored and hash-pinned, and appears in the
+   SBOM. This is the module's real cost and the honest argument against enabling it: it
+   enlarges the dependency surface that has to be defended in the zone that holds raw PII.
+
+**What it produces.** Tokenised, de-identified triage output only: which exception clusters
+merit human attention and why, expressed in ontology terms and tokens. It never emits a real
+value, and it is never the decider — `exception-triage` on the Claude side and a human
+auditor both remain in the loop. Per the assistive-only constraint, an SLM triage verdict is
+an input to a workpaper, not a conclusion in one.
+
+**Degradation.** Feature flag off, or Node absent, or Pi's model resolution failing → the
+module is skipped and the pipeline proceeds exactly as specced. No phase consumes its output
+as a required input.
+
+### Attestation — proving raw data never left the box
+
+The requirement is not only that raw data stays local but that this is **demonstrable to a
+third party**: an audit committee, the client's security function, or a regulator. That is an
+evidence problem distinct from the control problem, so it gets its own deliverable.
+
+`/lf:attest` emits an attestation pack covering **all** Zone 1 processing — the baseline probe
+and, when enabled, the Pi triage module. The evidence is the same either way, because safety
+comes from the environment rather than from the SDK.
+
+| Artifact | What it establishes |
+|---|---|
+| `run-manifest.jsonl` | hash-chained, one record per Zone 1 run: host id, interface state, model digest, config hash, input row counts, output hash, SHA-256 of every file read and written. Chained so it cannot be retro-edited |
+| `egress-proof/` | packet capture and interface state spanning the run, showing zero outbound; or, where containerised, the `--network=none` config hash |
+| `env-proof.json` | the process ran under `env -i` with no `*_API_KEY` present — it could not authenticate to any hosted provider |
+| `sbom.json` | every dependency present in Zone 1, Python wheels and vendored `node_modules` alike |
+| `model-pin.json` | model digest resolved offline and verified against the pinned value |
+| `canary-report.md` | a unique canary planted in the raw data, never observed in any Zone 2/3 output, transcript or log. Absence across the whole run is affirmative evidence, not merely absence of evidence |
+| `reproduction.md` | temperature 0, pinned seed, pinned digest — an independent auditor re-runs on their own box and obtains identical output hashes |
+| `ATTESTATION.md` | the human-readable statement, indexed into the evidence above |
+
+`reproduction.md` is the strongest item. Determinism means the claim does not rest on trusting
+our code or our logs: an independent party can reproduce the transformation and compare
+hashes. Every other artifact supports a claim about *this* run; reproducibility supports a
+claim anyone can re-test.
+
+**Air-gapped operation.** Supported but not required, and it does not change D1. Three staging
+consequences: Ollama models pre-pulled and digest-verified offline, Presidio's spaCy models
+pre-downloaded, Python wheels and `node_modules` vendored. `/lf:preflight` gains an air-gap
+mode asserting no interface is up, and refusing to run if one is.
+
+One structural note recorded so it is not discovered late: Claude Code requires the Anthropic
+API, so a genuinely air-gapped box cannot run Claude. Full air-gap therefore implies two
+machines — an offline box for Zone 1 and a connected one running Claude against the Zone 2
+extract — with a reviewed transfer between them. That topology is a stronger version of the
+same guarantee and the transfer boundary is specced as a clean seam so the same code runs in
+either arrangement, but it is **not** the primary topology and D1 is unchanged.
 
 ### Anonymisation transforms
 
@@ -440,7 +550,8 @@ plugins/ledger-forensics/
 ├── commands/
 │   ├── preflight.md      discover.md     probe.md      classify.md
 │   ├── seal.md           map-ontology.md audit-scope.md
-│   └── patterns.md       detect.md       rings.md      findings.md
+│   ├── patterns.md       detect.md       rings.md      findings.md
+│   └── attest.md         triage.md  (optional module)
 ├── agents/
 │   ├── schema-cartographer.md   pii-classifier.md   ontology-mapper.md
 │   ├── audit-scoper.md          pattern-designer.md ring-analyst.md
@@ -467,6 +578,12 @@ plugins/ledger-forensics/
 │   ├── extract.py      anon -> parquet -> DuckDB mirror
 │   ├── detect.py       run resolved pattern packs
 │   ├── deanon.py       human-only re-identification CLI
+│   ├── attest.py       hash-chained run manifest, egress and env proof, SBOM
+│   └── triage/         OPTIONAL Pi module. Absent-safe; no phase requires it
+│       ├── models.json     loopback-pinned, openai-completions
+│       ├── tools.ts        fixed allowlist: sample_rows, column_stats,
+│       │                   check_pattern, emit_finding. No shell, no fetch
+│       └── run.ts          Pi session; env -i; constrained JSON out
 │   └── selftest.py     guardrail self-test behind /lf:preflight
 ├── ontology/
 │   ├── canonical.yaml
@@ -503,7 +620,9 @@ Data map and ERD · signed `classification.yaml` · `mapping.yaml` · audit data
 risk-and-control matrix · untestable register · resolved detection SQL · tokenised exception
 CSVs · one workpaper per finding, each carrying assertion, population, test, exception count
 and required human verification steps · Obsidian vault · `preflight-report.md` ·
-`query-log.jsonl` · `deanon-access-log.jsonl` · `incidents.jsonl` · `dpia-input.md`.
+`query-log.jsonl` · `deanon-access-log.jsonl` · `incidents.jsonl` · `dpia-input.md` ·
+**`attestation/`** (run manifest, egress proof, env proof, SBOM, model pin, canary report,
+reproduction instructions, `ATTESTATION.md`).
 
 `dpia-input.md` is a pre-filled input to the PDPA data protection impact assessment that the
 repo's own evidence pack identifies as a mandatory pre-go-live deliverable: processing
@@ -533,6 +652,12 @@ guarantee rather than of a feature.
 | `test_seal_signoff.py` | unsigned or hash-mismatched `classification.yaml` refuses to seal |
 | `test_patterns_schema.py` | every pattern YAML validates; `threshold_ref` unpopulated blocks the domain |
 | `test_agents.py` | agent frontmatter contract; `schema-cartographer` lacks `query.py` access |
+| `test_attest_chain.py` | manifest hash chain detects an edited record; canary report is derived, not asserted |
+| `test_attest_env_proof.py` | a run with any `*_API_KEY` in the environment fails rather than being attested |
+| `test_triage_absent.py` | **with Node uninstalled and the flag off, the full suite still passes** — the optional module is genuinely optional |
+| `test_triage_tools.py` | Pi's tool registry contains only the four allowlisted tools; no shell, file-write or fetch tool is reachable |
+| `test_triage_loopback.py` | a `models.json` with a non-loopback `baseUrl` is rejected before a session opens |
+| `test_triage_output.py` | triage findings are schema-validated and pass L3.5 scrub; a planted raw value never reaches Zone 2 |
 | `test_end_to_end_no_pii.py` | synthetic eFinancials-shaped DB with Faker LK data through the full pipeline; **zero PII patterns and zero canary hits** in any output or transcript |
 
 `test_end_to_end_no_pii.py` is the proof of the whole claim and should be written first,
@@ -548,12 +673,18 @@ failing, in P1.
 | P4 | `ontology/canonical.yaml`, `ontology-mapper`, `audit-scoper` | |
 | P5 | Pattern library (33), `pattern-designer`, `extract.py`, `detect.py`, DuckDB mirror | |
 | P6 | `ring-analyst`, `exception-triage`, workpapers, vault builder, `dpia-input.md` | |
+| P7 | `attest.py`, `/lf:attest`, air-gap preflight mode, attestation pack | Independent of P8; deliverable on its own |
+| **P8** | **OPTIONAL** — Pi triage module: `models.json`, tool allowlist, `run.ts`, vendored `node_modules`, `/lf:triage` | Gated behind `test_triage_absent.py`: the plugin must pass its full suite with Node uninstalled before this phase may land |
 
 P1 ships and is proven independently. It is the phase that earns the right to run the rest.
 
 ## New dependencies
 
 `duckdb` (not installed) · one or two Ollama pulls (`qwen3:8b-q4_K_M`, `qwen3:4b-q4_K_M`).
+
+**Optional module only (P8), never a hard dependency:** Node runtime ·
+`@earendil-works/pi-coding-agent`, vendored and hash-pinned. The plugin's install, test suite
+and full pipeline must all succeed with none of these present.
 Already present: `presidio_analyzer`, `faker`, `pandas`, `sqlalchemy`, `pymssql`. No
 Microsoft ODBC driver required — `pymssql` over FreeTDS.
 
@@ -593,6 +724,8 @@ Carried deliberately rather than guessed at.
 ## Deferred
 
 - Real-time or scheduled monitoring. This is a point-in-time audit tool.
+- Two-machine air-gapped topology as the *primary* mode. Supported and specced as a clean
+  seam, but D1 stands: one sandbox box is the documented default.
 - Writing into the user's existing second-brain vault. Each engagement emits an isolated one.
 - Cross-engagement pattern learning.
 - Any production connection mode.
