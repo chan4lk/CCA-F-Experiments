@@ -689,7 +689,7 @@ granted. Work is therefore split so that the first plan needs no database at all
 ## Repository layout
 
 ```
-plugins/ledger-forensics/
+ledger-forensics/
 ├── .claude-plugin/plugin.json
 ├── README.md
 ├── commands/
