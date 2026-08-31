@@ -7,7 +7,7 @@
 ## Problem
 
 An internal audit function is being given access to the MS SQL Server database behind
-Scienta, the core banking system of Mercantile Investments — a leasing, hire-purchase and
+eFinancials, the core banking system of Mercantile Investments — a leasing, hire-purchase and
 deposit-taking finance company. The audit objective is data discovery, relationship and
 pattern analysis, and fraud detection across that database.
 
@@ -53,7 +53,7 @@ that say "do not read PII" are not the mechanism.
 - **Does not decide anything.** Output is "exception requiring investigation", never
   "fraud". This follows the repo's own finding that the AI layer must be assistive with
   mandatory human review, and PDPA constraints on automated decision-making.
-- **Ships no Scienta-specific table names.** Everything physical is discovered and recorded
+- **Ships no eFinancials-specific table names.** Everything physical is discovered and recorded
   in a per-installation `mapping.yaml`.
 - **Not a general-purpose SQL agent.** Read paths are narrow and governed by design.
 
@@ -72,7 +72,7 @@ Settled during brainstorming, recorded here so the implementation does not relit
 | D7 | **Amounts and posting timestamps kept exact** | Structuring, Benford, round-number, after-hours and interval tests need truth. Recorded as a residual risk in the DPIA input |
 | D8 | **Deny hooks fail closed** | Deliberate divergence from `proposal-research`, where guards fail open. A leaked NIC costs more than a blocked session |
 | D9 | **Detection defaults to a local DuckDB mirror** | Rule tuning is where most queries happen; it should cost the database nothing |
-| D10 | **Rules written against a canonical ontology, not physical tables** | Pattern library survives a Scienta upgrade; unmapped entities become audit findings |
+| D10 | **Rules written against a canonical ontology, not physical tables** | Pattern library survives an eFinancials upgrade; unmapped entities become audit findings |
 | D11 | **No FIU cash-reporting threshold is hardcoded** | The figure must be sourced, not asserted from memory, in a control a regulator may read |
 
 ## Architecture
@@ -80,7 +80,7 @@ Settled during brainstorming, recorded here so the implementation does not relit
 ### Trust zones
 
 ```
-ZONE 0  Scienta PRODUCTION       never touched by this plugin
+ZONE 0  eFinancials PRODUCTION       never touched by this plugin
    |  nightly restore, out of band, by the DBA
    v
 ZONE 1  sandbox  dbo.*           raw PII. Claude's login has NO GRANT here.
@@ -161,7 +161,7 @@ any statement whose first keyword is not `SELECT` or `WITH`.
 
 ### Fail-closed rules
 
-- **Unclassified column is absent from `anon`, not masked.** A column added by a Scienta
+- **Unclassified column is absent from `anon`, not masked.** A column added by an eFinancials
   upgrade is invisible until classified. Absence is detectable in review; a bad mask is not.
 - **SLM unavailable, timed out, schema-invalid, or low-confidence** → the whole free-text
   column is suppressed, emitting only a redaction marker plus a length bucket.
@@ -295,47 +295,109 @@ Canonical entities: `Party`, `Employee`, `Facility` (Lease / HP / Loan), `Collat
 `AuditEvent`.
 
 `ontology/canonical.yaml` defines entities, required and optional attributes, and
-relationships. `mapping.yaml` binds each to physical Scienta tables and columns, per
+relationships. `mapping.yaml` binds each to physical eFinancials tables and columns, per
 installation.
 
-Two payoffs. The pattern library survives a Scienta upgrade, because only the mapping
-changes. And **unmapped canonical entities are themselves audit findings** — "double-pledge
+Three payoffs. The pattern library survives an eFinancials upgrade, because only the mapping
+changes. **Unmapped canonical entities are themselves audit findings** — "double-pledge
 cannot be tested because no collateral-to-facility relationship exists in the data" is a
-reportable control weakness, captured in `untestable-register.md`.
+reportable control weakness, captured in `untestable-register.md`. And the plugin ports: the
+vendor states eFinancials is in use at **25 registered financial institutions in Sri Lanka**,
+so a mapping is the only per-institution work.
+
+### eFinancials module map
+
+Sourced from the vendor's published module list, not from the schema. This is a *prior* for
+`/lf:discover` — a hypothesis about what to look for and what table-prefix families to
+expect — never a substitute for discovery. eFinancials is described as a **decentralised**
+system covering leasing, loans, recovery, impairment, credit risk rating and scorecard,
+recovery call centre, and **yard management**.
+
+| eFinancials module | Canonical entities | Audit relevance |
+|---|---|---|
+| Central Module | `Party`, `Branch`, `Employee`, `MasterDataChange` | customer master, the IN-03 payout-preceded-by-edit test |
+| Leasing System | `Facility`, `Collateral` | CO-01..CO-04, CO-07, CO-08 |
+| Loan Module | `Facility` | CO-05, CO-06, CO-09 |
+| Revolving Loan | `Facility` | limit-utilisation cycling, evergreening |
+| Recovery System | `Receipt`, `Waiver`, `Posting` | CR-01..CR-06 |
+| Credit Risk Rating & Score Card | `Facility` | **scorecard override** — new pattern CO-11 |
+| Recovery Call Centre | `AuditEvent` | recovery-officer contact vs collection reality |
+| Lead Management | `Party` | origination-side introducer concentration |
+| Central CRIB Management System | `Party`, `Facility` | **CRIB inquiry absent or post-dated** — new pattern CO-12 |
+| Fixed Deposit System | `Deposit` | DP-02, DP-04, DP-05 |
+| Savings System | `Deposit`, `Posting` | DP-01, DP-03, DP-06 |
+| General Ledger | `GLAccount`, `Posting` | CR-03, IN-07, IN-08 |
+| SLIPS Module | `Posting` | **outbound interbank payments** — beneficiary-change pattern IN-09 |
+| Fixed Assets Module | — | candidate fifth domain, see Open items |
+| Accounts Payable | — | candidate fifth domain (vendor and duplicate-payment fraud) |
+| Accounts Receivable | — | candidate fifth domain |
+| AML | `Posting`, `Party` | DP-07 becomes checkable against the module's own alert tables |
+
+Five consequences for the design, all of which improve it:
+
+1. **A dedicated AML module exists.** DP-07 changes from "find unreported threshold breaches"
+   to the sharper audit question: *did the AML module generate an alert, and was it
+   dispositioned?* An alert raised and silently closed is a stronger finding than a
+   transaction never flagged. The module's own alert and disposition tables become audit
+   evidence, and its threshold configuration becomes the sourced value D11 is waiting for.
+2. **CRIB integration is a control test, not just data.** A disbursement with no preceding
+   CRIB inquiry, or an inquiry dated after disbursement, is a concrete, checkable exception —
+   the same shape as the advance-payment/CUSDEC reconciliation the repo's evidence pack
+   recommends as a first rule.
+3. **Yard management makes CR-06 real.** Repossessed-vehicle custody and sale proceeds have
+   a system of record, so proceeds-versus-valuation shortfall and yard-dwell-time anomalies
+   are testable rather than aspirational.
+4. **Scorecard and impairment are override surfaces.** A manual override of a scorecard
+   result, and impairment-stage regrading that avoids NPL classification (evergreening), are
+   both high-value leasing-sector typologies that the module list confirms are in scope.
+5. **SLIPS is the money-out door.** Outbound payment instructions are where a master-data
+   change turns into a loss, which raises IN-03's priority and adds IN-09.
+
+Six new patterns follow, taking the library from 33 to 39: **CO-11** scorecard override
+concentration · **CO-12** CRIB inquiry absent or post-dated at disbursement · **CO-13**
+evergreening and impairment-stage regrading to avoid NPL classification · **CR-09** yard
+dwell-time and sale-proceeds anomalies · **IN-09** SLIPS beneficiary account changed between
+approval and payment · **DP-08** AML alert raised then closed without documented disposition.
 
 ### Fraud pattern library
 
-33 patterns across the four domains. Each is a YAML carrying: `id`, `title`, `domain`,
+39 patterns across the four domains. Each is a YAML carrying: `id`, `title`, `domain`,
 `typology`, `audit_assertion`, `requires.entities`, `requires.attributes`, detection
 template, `thresholds`, `false_positive_drivers`, `evidence_columns`, `severity`,
 `requires_human_verification`.
 
-**Credit origination and collateral (10)** — CO-01 ghost lease (disbursed with no collateral,
+**Credit origination and collateral (13)** — CO-01 ghost lease (disbursed with no collateral,
 valuation or insurance record) · CO-02 valuation inflation and valuer concentration ·
 CO-03 duplicate identity (same NIC token on multiple parties; shared phone and address
 cluster) · CO-04 double pledge (same collateral token on multiple active facilities) ·
 CO-05 staff-linked borrower · CO-06 approval-limit splitting · CO-07 backdated approval ·
 CO-08 serial guarantor · CO-09 first-payment-default clusters by originator ·
-CO-10 placeholder-identity concentration by originating officer.
+CO-10 placeholder-identity concentration by originating officer ·
+CO-11 scorecard override concentration · CO-12 CRIB inquiry absent or post-dated at
+disbursement · CO-13 evergreening and impairment-stage regrading to avoid NPL
+classification.
 
-**Collections, recovery and cash (8)** — CR-01 receipt-to-posting lag outliers by officer
+**Collections, recovery and cash (9)** — CR-01 receipt-to-posting lag outliers by officer
 (teeming and lading) · CR-02 reversal and cancellation concentration · CR-03 suspense
 parking uncleared beyond n days · CR-04 waiver beyond authority, or waiver immediately
 before settlement · CR-05 early-settlement rebate recomputation mismatch · CR-06
 repossession proceeds against valuation shortfall · CR-07 teller cash-shortage patterns ·
-CR-08 round-number and duplicate-amount receipts.
+CR-08 round-number and duplicate-amount receipts · CR-09 yard dwell-time and
+sale-proceeds anomalies.
 
-**Deposits and AML/CTR (7)** — DP-01 cash structuring below the reporting threshold in a
+**Deposits and AML/CTR (8)** — DP-01 cash structuring below the reporting threshold in a
 rolling window per party cluster · DP-02 dormant reactivation followed by withdrawal ·
 DP-03 third-party payout (payee account token differs from registered) · DP-04 rapid FD
 open-close cycling · DP-05 interest-rate override by user · DP-06 shared contact or address
-across unrelated depositors · DP-07 threshold-breaching transactions with no matching report.
+across unrelated depositors · DP-07 threshold-breaching transactions with no matching
+report · DP-08 AML alert raised then closed without documented disposition.
 
-**Insider, master data and GL (8)** — IN-01 maker equals checker · IN-02 after-hours,
+**Insider, master data and GL (9)** — IN-01 maker equals checker · IN-02 after-hours,
 weekend and holiday postings · IN-03 master-data change (bank account, phone, address)
 within n days before a payout · IN-04 terminated-employee login activity · IN-05 privilege
 escalation events · IN-06 audit-trail sequence gaps · IN-07 Benford first-digit deviation
-and round-number journals by user · IN-08 postings to closed periods.
+and round-number journals by user · IN-08 postings to closed periods · IN-09 SLIPS
+beneficiary account changed between approval and payment.
 
 Per D11, DP-01 and DP-07 carry a `threshold_ref` that must be populated from a sourced
 authority. `/lf:preflight` refuses to enable the deposits domain while it is unset.
@@ -410,10 +472,10 @@ plugins/ledger-forensics/
 │   ├── canonical.yaml
 │   └── mapping.example.yaml
 ├── patterns/
-│   ├── credit-origination/       (10 yaml)
-│   ├── collections-cash/         (8 yaml)
-│   ├── deposits-aml/             (7 yaml)
-│   └── insider-masterdata-gl/    (8 yaml)
+│   ├── credit-origination/       (13 yaml)
+│   ├── collections-cash/         (9 yaml)
+│   ├── deposits-aml/             (8 yaml)
+│   └── insider-masterdata-gl/    (9 yaml)
 └── tests/
 ```
 
@@ -471,7 +533,7 @@ guarantee rather than of a feature.
 | `test_seal_signoff.py` | unsigned or hash-mismatched `classification.yaml` refuses to seal |
 | `test_patterns_schema.py` | every pattern YAML validates; `threshold_ref` unpopulated blocks the domain |
 | `test_agents.py` | agent frontmatter contract; `schema-cartographer` lacks `query.py` access |
-| `test_end_to_end_no_pii.py` | synthetic Scienta-shaped DB with Faker LK data through the full pipeline; **zero PII patterns and zero canary hits** in any output or transcript |
+| `test_end_to_end_no_pii.py` | synthetic eFinancials-shaped DB with Faker LK data through the full pipeline; **zero PII patterns and zero canary hits** in any output or transcript |
 
 `test_end_to_end_no_pii.py` is the proof of the whole claim and should be written first,
 failing, in P1.
@@ -501,11 +563,32 @@ Carried deliberately rather than guessed at.
 
 1. **FIU cash-reporting threshold** — unset until sourced from a citable authority or from
    the repo's existing evidence pack. Blocks the deposits domain, not the plugin.
-2. **Scienta physical schema** — unknown by design. `/lf:discover` is the answer, and
-   `mapping.yaml` is where it lands.
-3. **Approval-authority matrix and waiver limits** — CO-06 and CR-04 need the institution's
+2. **eFinancials physical schema** — unknown by design. `/lf:discover` is the answer, and
+   `mapping.yaml` is where it lands. The module map above is a prior, not a schema.
+3. **Is it one database or many?** The vendor describes eFinancials as a *decentralised*
+   system, and the published material does not say what that means physically. If it is
+   per-branch databases consolidating to head office, three things change: `/lf:discover`
+   must enumerate instances rather than a schema, `seal.py` must run per database with one
+   shared token secret so tokens stay comparable across branches, and a new and valuable
+   pattern class opens up — **branch-to-head-office reconciliation gaps**, where a
+   transaction exists at one level and not the other. That is a classic concealment route in
+   decentralised cores. Resolve this in the first access conversation; it is the single
+   question with the largest effect on P2.
+4. **Does an audit trail actually exist?** The published module list names no audit-trail,
+   user-administration or maker-checker component. If there is no audit-event table,
+   IN-01, IN-02, IN-04, IN-05 and IN-06 are all untestable — and that absence is itself a
+   significant reportable control weakness, not merely a gap in our coverage. First thing
+   to confirm at discovery; it goes in `untestable-register.md` either way.
+5. **Fifth domain: procurement and expenses.** Fixed Assets, Accounts Payable and Accounts
+   Receivable are in the product but outside the four domains selected. They carry their own
+   well-understood typologies — duplicate vendor payments, fictitious vendors, vendor bank
+   account matching an employee's, invoice splitting below authority, asset disposal at
+   undervalue. Deliberately out of scope for v1; raised because the data will be sitting
+   right there and the marginal cost of adding the domain later is a pattern pack, not a
+   redesign.
+6. **Approval-authority matrix and waiver limits** — CO-06 and CR-04 need the institution's
    own delegated-authority thresholds, which are a document, not a database table.
-4. **Holiday calendar** — IN-02 needs Sri Lankan public and bank holidays as config.
+7. **Holiday calendar** — IN-02 needs Sri Lankan public and bank holidays as config.
 
 ## Deferred
 
