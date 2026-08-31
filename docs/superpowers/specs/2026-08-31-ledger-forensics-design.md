@@ -564,8 +564,7 @@ authority. `/lf:preflight` refuses to enable the deposits domain while it is uns
 
 ### `/lf:preflight` — the trust anchor
 
-Every other command refuses to run without a passing preflight matching the current config
-hash. It proves rather than asserts:
+It proves rather than asserts:
 
 1. Claude's login receives a permission denial on `dbo.*`.
 2. A DML statement is rejected independently at L1, L2 and L3.
@@ -577,6 +576,32 @@ hash. It proves rather than asserts:
 7. Every deny hook is exercised with an attack string and returns exit 2.
 
 Output: `preflight-report.md`, plus a config-hash stamp the other commands check.
+
+### The preflight gate is advisory until Plan 2 wires it
+
+Stated plainly because an earlier draft of this spec claimed otherwise. The intent is that
+every command touching data refuses to run without a passing preflight for the current
+config hash. **No code enforces that today.** `commands/preflight.md` says it in prose, and
+prose is not a gate.
+
+The reason is structural rather than negligent: the commands that would be gated —
+`probe.py`, `query.py`, `detect.py`, `extract.py`, `seal.py` — do not exist until Plan 2.
+The enforcement therefore lands with them, as a required precondition check reading the
+config-hash stamp in `preflight-report.md`. Recorded here as a Plan 2 acceptance criterion
+rather than left as an assumption, because a claimed gate that does not exist is worse than
+an acknowledged gap: a reader who believes the gate is real stops checking.
+
+### A residual the wiring check cannot close
+
+`lf/selftest.py`'s `guards_wired_for_mcp_tools` check exists because two guards once
+contained correct MCP-handling code while sitting under matchers that could never deliver
+an MCP tool to them — the fix was dead in production while every direct-invocation test
+passed. The check asserts a matcher admits a tool name using Python's `re.fullmatch`.
+
+That is a **model** of the harness's matcher semantics, not the harness itself. If Claude
+Code matches differently — substring, glob, or its own rule — the check could pass while
+production diverges. No local subprocess test can close this; only running under the real
+harness can. Recorded so the check is not mistaken for proof.
 
 ## Constitutional conformance
 
