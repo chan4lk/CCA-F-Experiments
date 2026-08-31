@@ -58,6 +58,11 @@ that say "do not read PII" are not the mechanism.
 - **Not a general-purpose SQL agent.** Read paths are narrow and governed by design.
 - **Node is never a hard dependency.** The Pi triage module (D12) is optional and
   feature-flagged off; the plugin installs, tests and runs fully without a Node runtime.
+- **Takes on no dependency on the host repo's existing pipeline** (D14). It does not read
+  `sql/gold_*.sql`, does not import `batch/`, and does not require Airflow, Spark, Iceberg,
+  Trino, Superset or Keycloak to be running. Deliberately duplicates rather than couples.
+- **Node is never a hard dependency.** The Pi triage module (D12) is optional and
+  feature-flagged off; the plugin installs, tests and runs fully without a Node runtime.
 
 ## Decisions
 
@@ -78,6 +83,9 @@ Settled during brainstorming, recorded here so the implementation does not relit
 | D11 | **No FIU cash-reporting threshold is hardcoded** | The figure must be sourced, not asserted from memory, in a control a regulator may read |
 | D12 | **Pi-orchestrated local SLM triage is an optional module, off by default** | Pi is an orchestrator, not a model. It adds a Node runtime to the zone holding raw PII, so it must be opt-in and the plugin must run fully without it |
 | D13 | **Local-only processing is proven, not asserted** | The requirement is demonstrability to a third party, which is an evidence problem distinct from the control problem. Hence `/lf:attest` and a reproducibility-based proof |
+| D14 | **Standalone. Zero dependency on the host repo's existing pipeline** | The Airflow/Spark/Iceberg/Trino implementation in `mi-audit-data-pipeline` is unfinished and not working. The plugin imports nothing from it and runs with all of it switched off |
+| D15 | **Scale-out is a documented fork, taken later** | When data volume outgrows single-box DuckDB, either a Claude Agent SDK version of the same logic or a handoff to the Spark/Iceberg batch path. Neither is designed now; the pattern definitions and the ontology are the portable assets |
+| D16 | **The host repo's constitution is binding** | `internal-audit-system-constitution.md` governs. Articles 10, 29, 30, 32 and Prohibited Practices 8, 9 and 13 impose hard requirements, and Part XII is a release gate |
 
 ## Architecture
 
@@ -540,6 +548,46 @@ hash. It proves rather than asserts:
 7. Every deny hook is exercised with an attack string and returns exit 2.
 
 Output: `preflight-report.md`, plus a config-hash stamp the other commands check.
+
+## Constitutional conformance
+
+The host repository's `internal-audit-system-constitution.md` governs this work. Six
+provisions impose requirements the design would otherwise have missed, and one is a release
+gate.
+
+| Provision | Requirement | Where it lands |
+|---|---|---|
+| **Article 29** + **PP8** | Full population is the default; sampling requires justification, and sampling from a population whose completeness has not been evidenced is prohibited | Detections run **full population**. `TABLESAMPLE`/`TOP` caps are confined to *profiling*, which produces no findings. Every detection run emits a reconciliation record — source row count, sealed row count, extracted row count, control totals — and refuses to report if they disagree |
+| **Article 30** + **PP13** | Analytics supporting a finding must be explainable and reperformable; unexplainable analytics cannot support a finding | **An SLM verdict may never be the sole basis of a finding.** Every finding record must cite a deterministic pattern id. A finding whose only support is an SLM output is structurally impossible to emit, and there is a test for it |
+| **Article 10** | Chain of custody: source system, extraction method, extractor, timestamp, integrity hash; auditee-provided evidence marked as such | The run manifest carries exactly these fields, using the host repo's existing field names (`EXTRACTION_METHOD`, `EXTRACTOR`, `AUDITEE_PROVIDED`) as a **naming convention only** — no import, no coupling (D14) |
+| **Article 32** + **PP9** | Internal audit holds no write access to auditee production systems, ever; access denials are logged and reportable as scope limitations | Already satisfied by L1/L2 (D2). Adds a requirement: the query gate logs **denials** as candidate scope limitations, not merely as errors |
+| **Article 14** + **Article 36** | Testing is reproducible; historical work reconstructable including the methodology in force at the time | Every detection run snapshots pattern versions, thresholds, `mapping.yaml`, `classification.yaml` hash and model digest into an immutable run bundle |
+| **Article 1** + **Article 28** | Independence is architectural; no in-scope role may alter the audit log | The token vault secret is **audit-held**, not IT-held. `deanon-access-log.jsonl` is append-only and hash-chained. Where IT operates the box, that is a recorded compensating-control gap |
+
+**Part XII standing test** is a release gate: the twelve questions are answered explicitly in
+`docs/CONSTITUTION-CONFORMANCE.md` before any phase is called done. A failure on any one is a
+blocking defect, per the constitution's own terms.
+
+One observation recorded for the host repo's owners rather than acted on here: the existing
+`batch/ingest_bronze.py` names `debezium-cdc` as its intended extraction method. Enabling CDC
+requires a DDL change on the source database, which for an auditee production system appears
+to conflict with Article 32 and Prohibited Practice 9 — a practice the constitution admits no
+business justification for. The sandbox-restore approach (D1) does not have this problem: the
+restore is part of the DBA's own operations and audit reads a copy. Flagged, not decided.
+
+## Plan decomposition
+
+The spec is too large for a single implementation plan, and database access has not yet been
+granted. Work is therefore split so that the first plan needs no database at all.
+
+| Plan | Phases | Needs DB access? |
+|---|---|---|
+| **1 — Safety spine and attestation** | P1 + P7 | **No.** Proven against a synthetic eFinancials-shaped fixture |
+| 2 — Discovery and probe | P2 + P3 | Yes |
+| 3 — Ontology and audit scope | P4 | Yes |
+| 4 — Pattern library and detection | P5 | Yes |
+| 5 — Rings, triage and findings | P6 | Yes |
+| 6 — Optional Pi triage module | P8 | Yes, plus Node |
 
 ## Repository layout
 
