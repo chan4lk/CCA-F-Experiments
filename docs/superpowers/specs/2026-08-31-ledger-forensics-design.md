@@ -1,0 +1,515 @@
+# Ledger Forensics Plugin — Design
+
+**Date:** 2026-08-31
+**Status:** Approved design, pending implementation plan
+**Author:** Chandima Ranaweera (with Claude)
+
+## Problem
+
+An internal audit function is being given access to the MS SQL Server database behind
+Scienta, the core banking system of Mercantile Investments — a leasing, hire-purchase and
+deposit-taking finance company. The audit objective is data discovery, relationship and
+pattern analysis, and fraud detection across that database.
+
+Three things make this hard, and all three are structural rather than analytical:
+
+1. **The data cannot reach Claude.** The database holds personal data of customers,
+   guarantors and staff. Nothing identifying may enter a model context hosted outside the
+   institution. An instruction not to read PII is not a control; the model can read whatever
+   its tools can reach.
+2. **The data must not be modified, and the source system must not be disturbed.** A
+   core banking database is a live production asset. An accidental `UPDATE` is a
+   catastrophe; an accidental table scan during business hours is an outage.
+3. **Nobody has seen the schema yet.** The plugin cannot be written against known table
+   names. It must discover the schema, work out which columns hold personal data, work out
+   which columns matter for fraud, and only then run detections.
+
+A fourth problem is quieter and defeats naive designs: **anonymisation destroys the
+signal.** Tokenise a NIC and `000000000V` — a placeholder identity, and a primary
+ghost-lending indicator — becomes indistinguishable from a real one. Suppress a name and
+"C. Ranaweera" can no longer be matched to "Chandima Ranaweera" as a duplicate borrower.
+The naive pipeline of *anonymise, then analyse* silently removes several of the highest-value
+fraud tests.
+
+## Goal
+
+A Claude Code plugin, `ledger-forensics`, that takes an undocumented core banking database
+and produces an audit-grade fraud detection programme — schema map, PII classification,
+canonical ontology mapping, audit scope, a parameterised fraud pattern library, executed
+detections, and workpapers — under a guarantee that **no personal data enters Claude's
+context at any point**.
+
+The guarantee is enforced by database permissions first and by hooks second. Prompts
+that say "do not read PII" are not the mechanism.
+
+## Non-goals
+
+- **Not an AML transaction monitoring system.** This is an audit tool producing exceptions
+  for human investigation, not a real-time screening platform. The
+  `research/aml-system-architecture-for-sri-lankan-banks-with-enterprise` evidence pack
+  covers the platform question; this plugin is the audit-side counterpart.
+- **Does not touch production.** Ever. The plugin operates on a restored backup or
+  read-only replica. Production access is out of scope by design.
+- **Does not decide anything.** Output is "exception requiring investigation", never
+  "fraud". This follows the repo's own finding that the AI layer must be assistive with
+  mandatory human review, and PDPA constraints on automated decision-making.
+- **Ships no Scienta-specific table names.** Everything physical is discovered and recorded
+  in a per-installation `mapping.yaml`.
+- **Not a general-purpose SQL agent.** Read paths are narrow and governed by design.
+
+## Decisions
+
+Settled during brainstorming, recorded here so the implementation does not relitigate them.
+
+| # | Decision | Rationale |
+|---|---|---|
+| D1 | Operate on a **sandbox restore**, plugin connects locally | Only topology where the deny controls are enforceable end to end |
+| D2 | **Enforce at the GRANT, not the hook** | Hooks protect against Claude; grants protect against bugs in our own scripts and against agents added later |
+| D3 | **Deterministic pseudonymisation with a local encrypted token vault** | Exact-match linkage across tables survives; auditor can still re-identify an exception locally |
+| D4 | **Presidio scrubs, SLM classifies** | Scrubbing must be deterministic and exhaustive; classification benefits from judgment on a sample |
+| D5 | **SLM reads raw data, pre-anonymisation, on the trusted box** | It is inside the trust boundary. It is the translator at the PII firewall |
+| D6 | **Linkage and pathology features computed trusted-side** | Fuzzy matching and placeholder detection are impossible post-tokenisation |
+| D7 | **Amounts and posting timestamps kept exact** | Structuring, Benford, round-number, after-hours and interval tests need truth. Recorded as a residual risk in the DPIA input |
+| D8 | **Deny hooks fail closed** | Deliberate divergence from `proposal-research`, where guards fail open. A leaked NIC costs more than a blocked session |
+| D9 | **Detection defaults to a local DuckDB mirror** | Rule tuning is where most queries happen; it should cost the database nothing |
+| D10 | **Rules written against a canonical ontology, not physical tables** | Pattern library survives a Scienta upgrade; unmapped entities become audit findings |
+| D11 | **No FIU cash-reporting threshold is hardcoded** | The figure must be sourced, not asserted from memory, in a control a regulator may read |
+
+## Architecture
+
+### Trust zones
+
+```
+ZONE 0  Scienta PRODUCTION       never touched by this plugin
+   |  nightly restore, out of band, by the DBA
+   v
+ZONE 1  sandbox  dbo.*           raw PII. Claude's login has NO GRANT here.
+   |                             SLM probe reads here. seal.py writes from here.
+   |  ---- crossing #1: seal.py + probe.py ----------------------------
+   v
+ZONE 2  sandbox  anon.*          tokenised views, DuckDB mirror, vault.sqlite
+   |                             Claude's login: SELECT on anon only
+   |  ---- crossing #2: query.py + extract.py ------------------------
+   v
+ZONE 3  Claude context           metadata, statistics, tokens, derived features
+```
+
+Exactly two boundary crossings, each a single audited script, each one-way. Zone 1 is
+reachable only by scripts the human invokes with an elevated local login; Claude's
+credentials cannot address it.
+
+### Pipeline
+
+```
+/lf:preflight     guardrail self-test; gates everything else
+      |
+/lf:discover      schema-cartographer  -> schema.json, fk-graph.json, volumetrics
+      |
+/lf:probe         probe.py (local SLM, Zone 1) -> probe-report.json
+      |
+/lf:classify      pii-classifier -> classification.yaml (status: draft)
+      |
+   [HUMAN SIGN-OFF GATE]   approved_by + approved_at + schema_hash
+      |
+/lf:seal          seal.py, run by the human with elevated login
+      |           builds anon.*, applies grants, verifies, snapshots schema hash
+      |
+/lf:map-ontology  ontology-mapper -> mapping.yaml + gap list
+      |
+/lf:audit-scope   audit-scoper -> audit-data-map.md, risk-control-matrix.md,
+      |                            untestable-register.md
+/lf:patterns      pattern-designer -> patterns/resolved/*.sql
+      |
+/lf:detect        detect.py (DuckDB by default, --fresh for SQL Server)
+      |
+/lf:rings         ring-analyst -> shared-attribute graph, components, scores
+      |
+/lf:findings      exception-triage -> workpapers, vault, dpia-input.md
+
+ccaf-deanon <token>    human-only CLI. Hook-denied to Claude. Every resolution logged.
+```
+
+### Six guardrail layers
+
+| # | Layer | Mechanism | Defeats |
+|---|---|---|---|
+| L1 | Grant | `claude_ro` has `SELECT` on `anon`, `VIEW DEFINITION` and `SHOWPLAN`; no grant on `dbo`; member of `db_denydatawriter` | raw PII read and all writes, by construction |
+| L2 | Connection | `SET QUERY_GOVERNOR_COST_LIMIT`, `LOCK_TIMEOUT`, statement timeout, `MAXDOP 1`, rollback-only, non-`sa` login | runaway load, accidental commit |
+| L3 | Query gate | single-statement SELECT-only parser; injected `TOP` cap; `SHOWPLAN_XML` estimated-cost pre-flight; session budget ledger | DML smuggling, table scans |
+| L3.5 | Output scrub | `query.py` and `probe.py` run every result set through the LK recognisers and Presidio **before printing it**; a hit redacts the cell, records an incident and fails the call | a column nobody classified — preventively |
+| L4 | Deny hooks | `sql_guard`, `pii_read_guard`, `model_guard`, `budget_guard` — PreToolUse, exit 2 | bypassing the CLI, vault/`.env` reads, cloud model calls, budget exhaustion |
+| L5 | Leak sentinel | PostToolUse on every tool; regex-scans the tool result for LK PII patterns and the canary; on a hit, records an incident and trips the circuit breaker that blocks all further data commands | anything that reached context by a path L3.5 does not own |
+
+L1 is primary. L4 exists because L1 cannot see what Claude does outside SQL.
+L3.5 and L5 exist because L1 through L4 all assume the classification was correct.
+
+**L3.5 and L5 are not the same control, and the distinction is deliberate.** L3.5 is
+*preventive* and runs inside our own scripts, where output is still ours to withhold — it is
+the layer that can genuinely stop a stray value from ever being printed. L5 is *detective*:
+a `PostToolUse` hook runs after the tool has already produced its result, so it must be
+treated as a tripwire and circuit breaker, not as a filter. Claiming otherwise would put the
+plugin's central guarantee on a mechanism that cannot carry it.
+
+The practical consequence: every path that can emit data must route through L3.5. A tool
+result reaching L5 with PII in it means a path exists that bypasses our scripts, which is a
+defect to be fixed rather than a case to be filtered — hence the circuit breaker and the
+incident record instead of a quiet redaction.
+
+Query rejection at L3 covers: `;`-chained statements, CTEs containing DML, `SELECT ... INTO`,
+`EXEC`/`sp_executesql`, `xp_*`, `OPENROWSET`/`OPENQUERY`, four-part linked-server names, and
+any statement whose first keyword is not `SELECT` or `WITH`.
+
+### Fail-closed rules
+
+- **Unclassified column is absent from `anon`, not masked.** A column added by a Scienta
+  upgrade is invisible until classified. Absence is detectable in review; a bad mask is not.
+- **SLM unavailable, timed out, schema-invalid, or low-confidence** → the whole free-text
+  column is suppressed, emitting only a redaction marker plus a length bucket.
+- **`classification.yaml` lacking human sign-off** → `seal.py` refuses to run.
+- **Schema hash mismatch against the sealed snapshot** → re-classification required before
+  any detection command will run.
+- **A deny hook that raises** → exit 2 (block). Justified by D8; mitigated by `/lf:preflight`
+  self-testing every hook so a crash surfaces before an audit run rather than during one.
+
+### Agent roster
+
+Seven subagents. Each is defined by what it *cannot* reach as much as by its prompt.
+
+| Agent | Tools | Consumes | Produces |
+|---|---|---|---|
+| `schema-cartographer` | Bash (`metadata.py` only), Read, Write | catalogue views | `schema.json`, `fk-graph.json`, volumetrics, ERD |
+| `pii-classifier` | Bash (`classify.py`, `profile.py`), Read, Write | column names, statistics, `probe-report.json` | `classification.yaml` (draft) |
+| `ontology-mapper` | Read, Write, Bash (`query.py`) | schema, classification | `mapping.yaml`, gap list |
+| `audit-scoper` | Read, Write | `mapping.yaml` | audit data map, risk-and-control matrix, untestable register |
+| `pattern-designer` | Read, Write, Bash (`query.py`) | `mapping.yaml`, pattern library | `patterns/resolved/*.sql` |
+| `ring-analyst` | Read, Write, Bash (`detect.py`) | tokens, cluster ids | shared-attribute graph, components, ring scores |
+| `exception-triage` | Read, Write | tokenised exceptions | workpapers, findings |
+
+`schema-cartographer` is hook-denied from `query.py`: it works on metadata and must not be
+able to select data rows. `pii-classifier` never receives a value — `profile.py` and
+`probe.py` return verdicts and statistics, never the inputs that produced them.
+`exception-triage` is prompt-constrained and test-enforced never to assert fraud.
+
+### The SLM probe
+
+The probe is the design's least obvious component and its most valuable one.
+
+**Why it may read raw PII.** It runs as a local process on the sandbox box. Its input never
+leaves the machine. It is inside the trust boundary in the same sense the DBA is.
+
+**What it buys.**
+
+1. **Value-based column classification.** Legacy core banking schemas carry `UDF1..UDF20`,
+   `TEXT3`, `REF_NO`, `FIELD_23`. Name-based classification is blind to a NIC sitting in
+   `UDF7`; value-based classification is the only thing that finds it.
+2. **Format-pathology features that anonymisation would destroy.** Extracted pre-tokenisation
+   and emitted as derived booleans: `nic_is_placeholder`, `nic_checkdigit_invalid`,
+   `name_is_test_pattern`, `addr_is_null_placeholder`, `contact_is_default`. These feed
+   ghost-customer detection, which is otherwise impossible on tokenised data.
+3. **Free-text triage.** Decides per column whether narrative fields can ever hold PII, and
+   therefore what anonymisation policy applies.
+4. **Ontology hints.** Proposes which canonical entity a table represents, from its values.
+
+**Six controls.**
+
+1. **Constrained output only.** JSON against a fixed schema: enum class, confidence,
+   boolean flags, counts. No prose crosses the boundary. Schema-validation failure discards
+   the verdict and suppresses the column. This is also the prompt-injection defence —
+   remarks and memo fields are customer-influenceable text, a small model will follow an
+   injected instruction, and the worst case here is a discarded verdict rather than an
+   exfiltration.
+2. **Output-side scrubbing.** The probe's own output passes through Presidio and the leak
+   sentinel before being written to any Zone 2 path. Small models echo examples into their
+   rationales; assume it and scrub.
+3. **Sampling classifier, never a filter.** ~25 distinct non-null values per column,
+   truncated to 120 characters. Every value in the sealed output is scrubbed
+   deterministically by Presidio regardless of what the probe said.
+4. **Determinism by artifact.** Temperature 0, pinned seed, every verdict cached with
+   `(model_digest, prompt_hash, input_hash)`. Re-runs read the cache, so the workpaper is
+   stable even though the model is not. A model digest change invalidates the cache and
+   forces re-review. The probe proposes; human sign-off makes it authoritative.
+5. **Egress lockdown.** `OLLAMA_HOST` forced to `127.0.0.1`; model verified by digest; any
+   `:cloud` tag or non-loopback host hard-denied at both `model_guard` and inside `slm.py`.
+   Ollama's log and history directories are treated as Zone 1 and hook-denied to Claude.
+   Preflight asserts the probe *fails* when the loopback model is unavailable rather than
+   falling back to anything.
+6. **Recall-biased prompting.** The prompt carries the Sri Lankan format catalogue with
+   synthetic examples. Low confidence resolves to *sensitive*. Over-flagging costs a needless
+   suppression; under-flagging costs a leak.
+
+**Model tiering.** Cold path, once per schema: `qwen3:8b-q4_K_M` (~5 GB) — better judgment
+where a miss becomes a leak. Hot path, bulk free-text redaction: `qwen3:4b-q4_K_M` (~2.5 GB),
+batched, concurrency 1. Both pinned by digest. Neither resolving locally degrades to
+Presidio-only plus full suppression of free text.
+
+Sizing note: the development machine is an M3 Pro / 18 GB, which accommodates the 8B
+comfortably when nothing else is resident.
+
+### Anonymisation transforms
+
+| Class | Transform | Rationale |
+|---|---|---|
+| NIC, passport, TIN | HMAC-SHA256 → `NIC_<hex>` | exact-match linkage survives |
+| Person name | suppressed; emit `name_phonetic_token`, `name_cluster_id` | fuzzy duplicate-borrower detection, computed trusted-side |
+| Address | suppressed; emit `addr_norm_token`, `district`, `addr_cluster_id` | collusion rings; geography no finer than district |
+| Mobile, email | HMAC token | shared-contact ring detection survives |
+| Date of birth | 5-year age band | no date of birth crosses, ever |
+| Account, lease, contract number | HMAC token, prefix-preserving | joins survive; product type stays visible |
+| Vehicle registration, chassis, engine | HMAC token + `vehicle_cluster_id` | double-pledge and transposed-digit detection |
+| Posting and value timestamps | **kept exact** | after-hours, weekend, sequence and interval tests need truth |
+| Monetary amounts | **kept exact** | structuring, Benford, round-number tests need truth |
+| Free text | SLM NER redaction, then Presidio as a second net; suppressed on any failure | residual risk concentrates here |
+| Staff and user identifiers | HMAC token, staff↔customer link preserved | insider detection |
+| Anything unclassified | absent | fail closed |
+
+**Re-identification risk on aggregates.** Exact amounts plus exact timestamps plus district
+plus age band can re-identify in a small population. Mitigation, and the reason the
+distinction matters:
+
+- **Descriptive aggregate tables** get *k*-anonymity suppression: cells with n < 5 suppressed.
+- **Exception rows** carry tokens only, with no quasi-identifier columns, so a single-row
+  exception — which is the entire point of fraud detection — remains safe.
+
+D7 is recorded in `dpia-input.md` as an accepted residual risk with its analytical
+justification, so the DPIA records a decision rather than an oversight.
+
+### Token vault
+
+Deterministic tokens: `HMAC-SHA256(secret, class || normalised_value)`, truncated, prefixed
+by class. The secret lives in the macOS Keychain, never in a file, never in `.env`.
+
+`vault.sqlite` holds `token → real value` and is encrypted at rest. It is:
+
+- written only by `seal.py`,
+- read only by `deanon.py`,
+- hook-denied to Claude for Read, Grep, Glob and Bash,
+- append-only, with every resolution recorded to `deanon-access-log.jsonl`.
+
+The access log matters beyond hygiene: PDPA accountability means every re-identification
+should itself be an auditable event.
+
+### Ontology
+
+Canonical entities: `Party`, `Employee`, `Facility` (Lease / HP / Loan), `Collateral`,
+`Deposit`, `Posting`, `Receipt`, `Waiver`, `GLAccount`, `Branch`, `MasterDataChange`,
+`AuditEvent`.
+
+`ontology/canonical.yaml` defines entities, required and optional attributes, and
+relationships. `mapping.yaml` binds each to physical Scienta tables and columns, per
+installation.
+
+Two payoffs. The pattern library survives a Scienta upgrade, because only the mapping
+changes. And **unmapped canonical entities are themselves audit findings** — "double-pledge
+cannot be tested because no collateral-to-facility relationship exists in the data" is a
+reportable control weakness, captured in `untestable-register.md`.
+
+### Fraud pattern library
+
+33 patterns across the four domains. Each is a YAML carrying: `id`, `title`, `domain`,
+`typology`, `audit_assertion`, `requires.entities`, `requires.attributes`, detection
+template, `thresholds`, `false_positive_drivers`, `evidence_columns`, `severity`,
+`requires_human_verification`.
+
+**Credit origination and collateral (10)** — CO-01 ghost lease (disbursed with no collateral,
+valuation or insurance record) · CO-02 valuation inflation and valuer concentration ·
+CO-03 duplicate identity (same NIC token on multiple parties; shared phone and address
+cluster) · CO-04 double pledge (same collateral token on multiple active facilities) ·
+CO-05 staff-linked borrower · CO-06 approval-limit splitting · CO-07 backdated approval ·
+CO-08 serial guarantor · CO-09 first-payment-default clusters by originator ·
+CO-10 placeholder-identity concentration by originating officer.
+
+**Collections, recovery and cash (8)** — CR-01 receipt-to-posting lag outliers by officer
+(teeming and lading) · CR-02 reversal and cancellation concentration · CR-03 suspense
+parking uncleared beyond n days · CR-04 waiver beyond authority, or waiver immediately
+before settlement · CR-05 early-settlement rebate recomputation mismatch · CR-06
+repossession proceeds against valuation shortfall · CR-07 teller cash-shortage patterns ·
+CR-08 round-number and duplicate-amount receipts.
+
+**Deposits and AML/CTR (7)** — DP-01 cash structuring below the reporting threshold in a
+rolling window per party cluster · DP-02 dormant reactivation followed by withdrawal ·
+DP-03 third-party payout (payee account token differs from registered) · DP-04 rapid FD
+open-close cycling · DP-05 interest-rate override by user · DP-06 shared contact or address
+across unrelated depositors · DP-07 threshold-breaching transactions with no matching report.
+
+**Insider, master data and GL (8)** — IN-01 maker equals checker · IN-02 after-hours,
+weekend and holiday postings · IN-03 master-data change (bank account, phone, address)
+within n days before a payout · IN-04 terminated-employee login activity · IN-05 privilege
+escalation events · IN-06 audit-trail sequence gaps · IN-07 Benford first-digit deviation
+and round-number journals by user · IN-08 postings to closed periods.
+
+Per D11, DP-01 and DP-07 carry a `threshold_ref` that must be populated from a sourced
+authority. `/lf:preflight` refuses to enable the deposits domain while it is unset.
+
+### Data load governance
+
+- Row counts from `sys.dm_db_partition_stats`, **never `COUNT(*)`** — free, no scan.
+- Column profiling via `TABLESAMPLE (1 PERCENT)` or `TOP 10000`. No full scans.
+- `SHOWPLAN_XML` estimated-cost pre-flight on every query; default governor limit 150.
+- Session budget: 50,000 rows. Per-query cap `TOP 5000` unless raised with a justification
+  recorded in the query ledger.
+- `/lf:detect` runs against the DuckDB mirror by default. SQL Server is touched only on
+  `--fresh`.
+- Extraction chunked by primary-key range, throttled, inside a configurable run window.
+- `query-log.jsonl` records sql hash, estimated cost, actual rows, duration and `agent_id`,
+  and is the input to `budget_guard`.
+
+### `/lf:preflight` — the trust anchor
+
+Every other command refuses to run without a passing preflight matching the current config
+hash. It proves rather than asserts:
+
+1. Claude's login receives a permission denial on `dbo.*`.
+2. A DML statement is rejected independently at L1, L2 and L3.
+3. A **planted canary NIC** in a sandbox row never reaches context; the sentinel fires.
+4. The pinned model resolves on loopback; a `:cloud` tag is rejected; probe fails rather
+   than falls back when the model is absent.
+5. Vault read is hook-denied across Read, Grep, Glob and Bash.
+6. The governor rejects a deliberately over-budget query.
+7. Every deny hook is exercised with an attack string and returns exit 2.
+
+Output: `preflight-report.md`, plus a config-hash stamp the other commands check.
+
+## Repository layout
+
+```
+plugins/ledger-forensics/
+├── .claude-plugin/plugin.json
+├── README.md
+├── commands/
+│   ├── preflight.md      discover.md     probe.md      classify.md
+│   ├── seal.md           map-ontology.md audit-scope.md
+│   └── patterns.md       detect.md       rings.md      findings.md
+├── agents/
+│   ├── schema-cartographer.md   pii-classifier.md   ontology-mapper.md
+│   ├── audit-scoper.md          pattern-designer.md ring-analyst.md
+│   └── exception-triage.md
+├── hooks/
+│   ├── hooks.json
+│   ├── sql_guard.py        deny DML/DDL, non-sanctioned clients, deanon invocation
+│   ├── pii_read_guard.py   deny vault, Zone 1 paths, .env, ollama logs
+│   ├── model_guard.py      deny cloud tags, non-loopback hosts, unpinned models
+│   ├── budget_guard.py     refuse queries past the session budget
+│   └── leak_sentinel.py    PostToolUse result scan, redact and log
+├── scripts/
+│   ├── conn.py         connection factory; read-only, timeouts, governor
+│   ├── metadata.py     catalogue extraction (no data rows)
+│   ├── profile.py      column statistics; returns stats, never values
+│   ├── recognizers_lk.py  NIC old/new, mobile, landline, passport, vehicle, TIN
+│   ├── probe.py        local SLM sampling probe (Zone 1)
+│   ├── slm.py          pinned Ollama client; loopback-only; fail-closed
+│   ├── classify.py     tiered classifier -> classification.yaml
+│   ├── vault.py        HMAC tokeniser + encrypted vault
+│   ├── seal.py         emit anon schema, apply grants, verify, snapshot hash
+│   ├── linkage.py      phonetic, normalised-address and near-duplicate clustering
+│   ├── query.py        the single governed query gate
+│   ├── extract.py      anon -> parquet -> DuckDB mirror
+│   ├── detect.py       run resolved pattern packs
+│   ├── deanon.py       human-only re-identification CLI
+│   └── selftest.py     guardrail self-test behind /lf:preflight
+├── ontology/
+│   ├── canonical.yaml
+│   └── mapping.example.yaml
+├── patterns/
+│   ├── credit-origination/       (10 yaml)
+│   ├── collections-cash/         (8 yaml)
+│   ├── deposits-aml/             (7 yaml)
+│   └── insider-masterdata-gl/    (8 yaml)
+└── tests/
+```
+
+Workspace, per engagement, outside the plugin:
+
+```
+engagements/<name>/
+├── preflight-report.md        config-hash stamped
+├── datamap/                   schema.json, fk-graph.json, volumetrics.md, erd.html
+├── probe-report.json          scrubbed, schema-validated verdicts
+├── classification.yaml        signed off
+├── mapping.yaml
+├── audit-data-map.md          risk-control-matrix.md   untestable-register.md
+├── patterns/resolved/*.sql
+├── exceptions/*.csv           tokens only
+├── findings/*.md              workpapers
+├── vault/                     Obsidian vault, house style
+├── query-log.jsonl            deanon-access-log.jsonl   incidents.jsonl
+└── dpia-input.md
+```
+
+## Deliverables
+
+Data map and ERD · signed `classification.yaml` · `mapping.yaml` · audit data map ·
+risk-and-control matrix · untestable register · resolved detection SQL · tokenised exception
+CSVs · one workpaper per finding, each carrying assertion, population, test, exception count
+and required human verification steps · Obsidian vault · `preflight-report.md` ·
+`query-log.jsonl` · `deanon-access-log.jsonl` · `incidents.jsonl` · `dpia-input.md`.
+
+`dpia-input.md` is a pre-filled input to the PDPA data protection impact assessment that the
+repo's own evidence pack identifies as a mandatory pre-go-live deliverable: processing
+purposes, data categories, transforms applied, retention, and accepted residual risks
+including D7.
+
+## Testing
+
+The hook tests are the most important tests in the plugin, because they are the tests of the
+guarantee rather than of a feature.
+
+| Test | Asserts |
+|---|---|
+| `test_hooks_sql_guard.py` | table of DML, DDL, chained, `EXEC`, `OPENROWSET` and bypass-client strings each exit 2; legitimate `SELECT`s pass |
+| `test_hooks_pii_read_guard.py` | vault, Zone 1 paths, `.env` and ollama log reads denied across Read, Grep, Glob, Bash; workspace reads pass |
+| `test_hooks_model_guard.py` | `:cloud` tags, non-loopback `OLLAMA_HOST`, unpinned digests denied |
+| `test_hooks_fail_closed.py` | a guard raising an exception exits 2, not 0 (D8) |
+| `test_output_scrub.py` | L3.5 — a planted PII value in a result set is redacted and the call fails, before anything is printed |
+| `test_leak_sentinel.py` | L5 — LK PII patterns and the canary in a tool result raise an incident and trip the circuit breaker |
+| `test_recognizers_lk.py` | synthetic-but-real-format NIC (both formats), mobile, landline, passport, vehicle series, TIN |
+| `test_probe_output.py` | deliberately poisoned rows produce no PII in `probe-report.json` |
+| `test_probe_injection.py` | an injection payload in a remarks field yields a discarded verdict, never a leak |
+| `test_probe_cache.py` | verdict cache is stable across runs; digest change invalidates it |
+| `test_vault.py` | token determinism, prefix preservation, vault encryption, access logging |
+| `test_query_governor.py` | over-cost query rejected pre-execution; budget exhaustion blocks |
+| `test_seal_grants.py` | after seal, the `claude_ro` login is denied on `dbo`, permitted on `anon`, and holds `SHOWPLAN` (which L3 cost pre-flight requires) |
+| `test_seal_signoff.py` | unsigned or hash-mismatched `classification.yaml` refuses to seal |
+| `test_patterns_schema.py` | every pattern YAML validates; `threshold_ref` unpopulated blocks the domain |
+| `test_agents.py` | agent frontmatter contract; `schema-cartographer` lacks `query.py` access |
+| `test_end_to_end_no_pii.py` | synthetic Scienta-shaped DB with Faker LK data through the full pipeline; **zero PII patterns and zero canary hits** in any output or transcript |
+
+`test_end_to_end_no_pii.py` is the proof of the whole claim and should be written first,
+failing, in P1.
+
+## Build order
+
+| Phase | Content | Gate |
+|---|---|---|
+| **P1** | Skeleton, `/lf:preflight`, all six guardrail layers, every hook test, the canary, `test_end_to_end_no_pii.py` | Nothing touches real data until preflight passes |
+| P2 | `metadata.py`, `schema-cartographer`, `/lf:discover`, ERD | |
+| P3 | `recognizers_lk.py`, `slm.py`, `probe.py`, `classify.py`, `vault.py`, `linkage.py`, `seal.py`, sign-off gate | |
+| P4 | `ontology/canonical.yaml`, `ontology-mapper`, `audit-scoper` | |
+| P5 | Pattern library (33), `pattern-designer`, `extract.py`, `detect.py`, DuckDB mirror | |
+| P6 | `ring-analyst`, `exception-triage`, workpapers, vault builder, `dpia-input.md` | |
+
+P1 ships and is proven independently. It is the phase that earns the right to run the rest.
+
+## New dependencies
+
+`duckdb` (not installed) · one or two Ollama pulls (`qwen3:8b-q4_K_M`, `qwen3:4b-q4_K_M`).
+Already present: `presidio_analyzer`, `faker`, `pandas`, `sqlalchemy`, `pymssql`. No
+Microsoft ODBC driver required — `pymssql` over FreeTDS.
+
+## Open items
+
+Carried deliberately rather than guessed at.
+
+1. **FIU cash-reporting threshold** — unset until sourced from a citable authority or from
+   the repo's existing evidence pack. Blocks the deposits domain, not the plugin.
+2. **Scienta physical schema** — unknown by design. `/lf:discover` is the answer, and
+   `mapping.yaml` is where it lands.
+3. **Approval-authority matrix and waiver limits** — CO-06 and CR-04 need the institution's
+   own delegated-authority thresholds, which are a document, not a database table.
+4. **Holiday calendar** — IN-02 needs Sri Lankan public and bank holidays as config.
+
+## Deferred
+
+- Real-time or scheduled monitoring. This is a point-in-time audit tool.
+- Writing into the user's existing second-brain vault. Each engagement emits an isolated one.
+- Cross-engagement pattern learning.
+- Any production connection mode.
