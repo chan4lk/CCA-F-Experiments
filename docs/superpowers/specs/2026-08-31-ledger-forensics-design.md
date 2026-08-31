@@ -85,6 +85,7 @@ Settled during brainstorming, recorded here so the implementation does not relit
 | D13 | **Local-only processing is proven, not asserted** | The requirement is demonstrability to a third party, which is an evidence problem distinct from the control problem. Hence `/lf:attest` and a reproducibility-based proof |
 | D14 | **Standalone. Zero dependency on the host repo's existing pipeline** | The Airflow/Spark/Iceberg/Trino implementation in `mi-audit-data-pipeline` is unfinished and not working. The plugin imports nothing from it and runs with all of it switched off |
 | D15 | **Scale-out is a documented fork, taken later** | When data volume outgrows single-box DuckDB, either a Claude Agent SDK version of the same logic or a handoff to the Spark/Iceberg batch path. Neither is designed now; the pattern definitions and the ontology are the portable assets |
+| D17 | **Two detection tiers, not one** | The scrub wants recall (over-redaction is free); the sentinel trips a circuit breaker and wants precision. One matcher cannot serve both — on a real ledger, `TXN-1234` and 12-digit account numbers would halt the run continuously, and a tripwire that cries wolf gets switched off |
 | D16 | **The host repo's constitution is binding** | `internal-audit-system-constitution.md` governs. Articles 10, 29, 30, 32 and Prohibited Practices 8, 9 and 13 impose hard requirements, and Part XII is a release gate |
 
 ## Architecture
@@ -160,6 +161,31 @@ ccaf-deanon <token>    human-only CLI. Hook-denied to Claude. Every resolution l
 
 L1 is primary. L4 exists because L1 cannot see what Claude does outside SQL.
 L3.5 and L5 exist because L1 through L4 all assume the classification was correct.
+
+**The two layers consume different matchers (D17).** This was learned the hard way
+during implementation, and it is the more important half of the L3.5/L5 distinction:
+
+- `find_all()` is **recall-biased** and feeds L3.5. It over-matches deliberately — a
+  needless redaction costs nothing.
+- `find_high_confidence()` is **precision-biased** and feeds L5 alone. Eligible kinds are
+  NIC (both generations, each requiring a valid day-of-year code, with the 12-digit form
+  additionally requiring a birth year in 1900-2100), mobile and landline.
+
+Vehicle registrations and passport numbers are **excluded from the sentinel tier**,
+because `CAB-1234` is structurally indistinguishable from `TXN-1234`, and `N1234567` from
+a part number, without knowing which column the value came from. Pointing the
+recall-biased matcher at a control that halts the audit run would have halted it on
+ordinary ledger content — `INV-9999`, `CHQ-0451`, `07-2025`, every account number.
+
+Accepted residual, recorded rather than hidden: a leaked vehicle registration or passport
+number will not trip the breaker. L3.5 still redacts both, and L5 exists to catch paths
+that bypass L3.5, so this narrows the tripwire rather than opening a hole. A 12-digit
+account number that happens to begin 19xx/20xx and carry a valid daycode still trips it;
+that case is genuinely ambiguous without a column name and belongs to the classifier.
+
+Dates are a related casualty to avoid: the numeric vehicle form must not match
+`12-08-2026`. Posting timestamps are kept exact by design (D7), so redacting a date
+destroys evidence the after-hours and interval tests need.
 
 **L3.5 and L5 are not the same control, and the distinction is deliberate.** L3.5 is
 *preventive* and runs inside our own scripts, where output is still ours to withhold — it is
