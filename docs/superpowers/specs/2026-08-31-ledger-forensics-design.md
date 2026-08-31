@@ -577,6 +577,34 @@ It proves rather than asserts:
 
 Output: `preflight-report.md`, plus a config-hash stamp the other commands check.
 
+### L3.5 protects identifier-shaped values only — not names, not free text
+
+Stated because the layer is called a "preventive output scrub" and a reader would
+reasonably assume it covers all personal data. It does not, and this was measured rather
+than inferred: six of six synthetic customer names passed through `scrub_rows` unchanged.
+
+`lf.recognizers_lk` has **no name recogniser, deliberately.** A name is not a pattern, and
+any regex broad enough to catch "Nadeeka Jayasuriya" also catches "Main Street" and every
+branch name in the ledger — which, pointed at a circuit breaker, would halt the run
+continuously (the failure D17 exists to prevent).
+
+Names are therefore handled one layer earlier, by **column suppression in `seal.py`**: the
+`anon` schema drops name and address columns outright and emits derived
+`name_phonetic_token` / `name_cluster_id` features instead, so fuzzy duplicate-borrower
+detection survives without the strings. See the anonymisation transforms table.
+
+The consequence for Plan 1 is concrete and unflattering: **`seal.py` does not exist yet**,
+so nothing in this plan proves name suppression works. The end-to-end proof models it with
+a stand-in helper and enforces the resulting absence, which establishes that the *pipeline
+shape* is right — not that the sealing layer is correct. That is Plan 2's burden.
+
+Two rules follow, and both belong in Plan 2's acceptance criteria:
+
+1. A column classified as suppress-class must be **absent** from `anon`, not masked in it.
+   Absence is detectable in review; a mask that silently stopped working is not.
+2. The scrub is a **backstop for identifier-shaped values that escape classification**, and
+   must never be described or relied on as the primary control for names or narrative text.
+
 ### The preflight gate is advisory until Plan 2 wires it
 
 Stated plainly because an earlier draft of this spec claimed otherwise. The intent is that
