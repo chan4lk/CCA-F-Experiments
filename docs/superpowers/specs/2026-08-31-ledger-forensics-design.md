@@ -85,6 +85,9 @@ Settled during brainstorming, recorded here so the implementation does not relit
 | D13 | **Local-only processing is proven, not asserted** | The requirement is demonstrability to a third party, which is an evidence problem distinct from the control problem. Hence `/lf:attest` and a reproducibility-based proof |
 | D14 | **Standalone. Zero dependency on the host repo's existing pipeline** | The Airflow/Spark/Iceberg/Trino implementation in `mi-audit-data-pipeline` is unfinished and not working. The plugin imports nothing from it and runs with all of it switched off |
 | D15 | **Scale-out is a documented fork, taken later** | When data volume outgrows single-box DuckDB, either a Claude Agent SDK version of the same logic or a handoff to the Spark/Iceberg batch path. Neither is designed now; the pattern definitions and the ontology are the portable assets |
+| D18 | **The tamper-evident ledger needs an external anchor** | A hash chain detects in-place edits, backdating, mid-chain deletion and reordering. It does NOT detect tail truncation or replacement by a shorter self-consistent chain — a chain cannot bootstrap its own completeness. `verify()` therefore accepts `expected_count` and `expected_head`, and the run manifest MUST publish both per ledger. Count alone is satisfied by a same-length forgery, so both are always passed together |
+| D19 | **Audit artifacts are protected from destruction, not just from reading** | Every guard originally asked "could this read something it shouldn't?" None asked "could this destroy the evidence?" `rm -f incidents.jsonl` was permitted. `zones.AUDIT_ARTIFACTS` + `destructive_reason()` now deny destructive verbs against the ledgers, the breaker file and `canary.txt` — while leaving reads allowed, because an auditor must be able to inspect the incident log |
+| D20 | **Verification is portable; appending is POSIX-only** | `reproduction.md` invites an independent auditor to re-run verification on their own machine, so `read_all()`, `verify()` and `head()` must import and run anywhere. Only `append()` requires `fcntl`. Its lock is bounded rather than indefinite: inside a 5-second hook, an unbounded wait means the process is killed externally and no fail-closed handler runs |
 | D17 | **Two detection tiers, not one** | The scrub wants recall (over-redaction is free); the sentinel trips a circuit breaker and wants precision. One matcher cannot serve both — on a real ledger, `TXN-1234` and 12-digit account numbers would halt the run continuously, and a tripwire that cries wolf gets switched off |
 | D16 | **The host repo's constitution is binding** | `internal-audit-system-constitution.md` governs. Articles 10, 29, 30, 32 and Prohibited Practices 8, 9 and 13 impose hard requirements, and Part XII is a release gate |
 
@@ -600,6 +603,21 @@ requires a DDL change on the source database, which for an auditee production sy
 to conflict with Article 32 and Prohibited Practice 9 — a practice the constitution admits no
 business justification for. The sandbox-restore approach (D1) does not have this problem: the
 restore is part of the DBA's own operations and audit reads a copy. Flagged, not decided.
+
+## Stated limitations
+
+Recorded here rather than left implicit, because an overstated control invites a reader to
+stop looking. Each was found during implementation.
+
+| Limitation | Why it stands |
+|---|---|
+| A path arriving purely through an exported shell variable (`cat "$SECRET_PATH"`) is invisible to textual matching | Structural limit of the hook layer, not a defect in `zones.py`. It is exactly why D2 makes the database GRANT the primary control and hooks the second |
+| `sql_guard`'s keyword matching is evadable by `${IFS}` splitting and base64+eval | Hardening a regex against obfuscation buys confidence, not safety. Quote-adjacency **was** closed, because that is a one-keystroke accident rather than deliberate evasion |
+| `SELECT ... INTO` separated by more than 2000 non-semicolon characters is missed | Deliberate trade for bounded backtracking. An unbounded span was quadratic and, once exposed to arbitrary tool payloads, could exceed the hook timeout — which fails open by external kill |
+| `model_guard`'s provider coverage is best-effort | An unlisted host is not noticed rather than blocked. The real controls are the air gap and the absence of API credentials in the process environment, not this guard. Inverting it to block all outbound HTTP would break `pip` and `git`, and a guardrail that disruptive gets switched off |
+| The leak sentinel misses a leaked vehicle registration or passport number | Consequence of D17. Those are structurally indistinguishable from ledger codes such as `TXN-1234` without column context. L3.5 still redacts both; this narrows the tripwire rather than opening a hole |
+| A ledger tampered but left well-formed keeps accreting, because `append()` does not verify first | Verifying from genesis on every append is O(n) per call and quadratic per session — unacceptable on a hot query log. Detection belongs at attestation time, where `verify()` runs once |
+| Destructive-op matching over-blocks `cat incidents.jsonl > /tmp/copy` | Textual matching cannot reliably distinguish a redirect's target from its source. The auditor uses the Read tool instead. Fail-closed direction |
 
 ## Plan decomposition
 
