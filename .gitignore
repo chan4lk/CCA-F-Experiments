@@ -13,3 +13,6 @@ logs/
 .DS_Store
 research/
 headroom_memory.db
+
+# Secrets
+.env
