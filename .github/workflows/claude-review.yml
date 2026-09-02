@@ -39,12 +39,23 @@ jobs:
                  detected_pattern: (.body | capture("pattern: `(?<p>[^`]+)`").p // "unknown")}]' \
             > prior.json || echo '[]' > prior.json
 
+      - name: Check the API key is configured
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || {
+            echo "::error::ANTHROPIC_API_KEY is not set in this repository's secrets."
+            exit 1
+          }
+
       - name: Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CI_REVIEW_MODEL: claude-haiku-4-5
           CI_REVIEW_BUDGET_USD: "2.00"
-          PYTHONPATH: src/ci_review/ci_review
+          # Two entries: the first makes `ci_review` importable as a package for
+          # `python -m`, the second resolves its flat intra-package imports.
+          PYTHONPATH: src/ci_review:src/ci_review/ci_review
         run: |
           uv run python -m ci_review review \
             --base "origin/${{ github.event.pull_request.base.ref }}" \
