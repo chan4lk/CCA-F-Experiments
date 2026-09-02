@@ -1,0 +1,63 @@
+name: claude-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the reviewer diffs against the base, so shallow will not do
+
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+
+      - name: Install the Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      # Findings already posted on this PR go back into the prompt, so a push does not
+      # re-report what the last run reported.
+      - name: Fetch findings already posted
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" \
+            --paginate --jq '[.[] | select(.user.login == "github-actions[bot]")
+              | {file: .path, line: .line,
+                 category: (.body | capture("`(?<c>[a-z-]+)`\\n").c // "unknown"),
+                 detected_pattern: (.body | capture("pattern: `(?<p>[^`]+)`").p // "unknown")}]' \
+            > prior.json || echo '[]' > prior.json
+
+      - name: Review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CI_REVIEW_MODEL: claude-haiku-4-5
+          CI_REVIEW_BUDGET_USD: "2.00"
+          PYTHONPATH: src/ci_review/ci_review
+        run: |
+          uv run python -m ci_review review \
+            --base "origin/${{ github.event.pull_request.base.ref }}" \
+            --prior prior.json \
+            --out review.json \
+            --fail-on-blocking
+
+      - name: Post the review
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -s review.json || exit 0
+          gh api --method POST \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+            --input review.json
