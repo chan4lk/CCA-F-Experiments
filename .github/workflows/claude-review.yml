@@ -1,0 +1,105 @@
+name: claude-review
+
+# DISABLED: manual only. The repo already runs `Claude Code Review`
+# (.github/workflows/claude-code-review.yml) on every PR, and two reviewers commenting
+# on the same diff is how a PR gets muted. Re-enable by uncommenting the pull_request
+# trigger below; the job body works unchanged either way.
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to review
+        required: true
+        type: string
+  # pull_request:
+  #   types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: claude-review-${{ inputs.pr || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # One source for the PR number, whichever trigger fired.
+  PR: ${{ inputs.pr || github.event.pull_request.number }}
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the reviewer diffs against the base, so shallow will not do
+
+      # On a manual run there is no pull_request payload, so the base branch and head
+      # ref are read back from the API instead.
+      - name: Resolve the PR under review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr view "$PR" --repo "${{ github.repository }}" \
+            --json baseRefName,headRefName \
+            --jq '"BASE=\(.baseRefName)\nHEAD=\(.headRefName)"' >> "$GITHUB_ENV"
+          git fetch origin "+refs/pull/$PR/head:refs/remotes/pr/$PR"
+          git checkout --detach "refs/remotes/pr/$PR"
+
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+
+      - name: Install the Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      # Findings already posted on this PR go back into the prompt, so a push does not
+      # re-report what the last run reported.
+      - name: Fetch findings already posted
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/pulls/$PR/comments" \
+            --paginate --jq '[.[] | select(.user.login == "github-actions[bot]")
+              | {file: .path, line: .line,
+                 category: (.body | capture("`(?<c>[a-z-]+)`\\n").c // "unknown"),
+                 detected_pattern: (.body | capture("pattern: `(?<p>[^`]+)`").p // "unknown")}]' \
+            > prior.json || echo '[]' > prior.json
+
+      # Either credential works: the CLI reads CLAUDE_CODE_OAUTH_TOKEN natively, which is
+      # what this repo already has for the claude-code-action workflow. Checked here so a
+      # missing secret is named rather than surfacing as a CLI error six steps later.
+      - name: Check a credential is configured
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || test -n "$CLAUDE_CODE_OAUTH_TOKEN" || {
+            echo "::error::Set either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in this repository's secrets."
+            exit 1
+          }
+
+      - name: Review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CI_REVIEW_MODEL: claude-haiku-4-5
+          CI_REVIEW_BUDGET_USD: "2.00"
+          # Two entries: the first makes `ci_review` importable as a package for
+          # `python -m`, the second resolves its flat intra-package imports.
+          PYTHONPATH: src/ci_review:src/ci_review/ci_review
+        run: |
+          uv run python -m ci_review review \
+            --base "origin/$BASE" \
+            --prior prior.json \
+            --out review.json \
+            --fail-on-blocking
+
+      - name: Post the review
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -s review.json || exit 0
+          gh api --method POST \
+            "repos/${{ github.repository }}/pulls/$PR/reviews" \
+            --input review.json

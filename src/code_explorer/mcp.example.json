@@ -1,0 +1,16 @@
+{
+  "//": "Copy to .mcp.json at the repo root. Project scope: committed, so the team shares it.",
+  "mcpServers": {
+    "github": {
+      "//": "A community server for a standard integration. Writing your own here buys nothing.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+    },
+    "microsoft_docs_mcp": {
+      "//": "Description matters: without one this detailed the agent reaches for Grep instead.",
+      "type": "http",
+      "url": "https://learn.microsoft.com/api/mcp"
+    }
+  }
+}
