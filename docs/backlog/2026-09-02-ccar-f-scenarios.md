@@ -65,8 +65,12 @@ Build `src/ci_review/` and a GitHub Actions workflow.
 - Per-file passes plus one cross-file integration pass (4.6)
 
 **Done when:** the workflow runs on a PR and posts structured inline comments, and the finding
-parser has unit tests that run without network. — *Built. 50 tests green; the workflow has not
-been exercised on a real PR.*
+parser has unit tests that run without network. — *Built, 53 tests green. The workflow ran on
+its own PR (#5) and found two real bugs in itself: a `PYTHONPATH` that pointed inside the
+package so `python -m` could not import it, and a demand for `ANTHROPIC_API_KEY` when this
+repo's secret is `CLAUDE_CODE_OAUTH_TOKEN`. Both fixed. It is now **manual-only** — the repo
+already runs `Claude Code Review` on every PR — so it has not yet posted inline comments on a
+real diff.*
 
 ## 3. Claude Code configuration & workflows (Scenario 2)
 
