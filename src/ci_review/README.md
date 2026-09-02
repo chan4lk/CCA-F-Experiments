@@ -23,7 +23,15 @@ PYTHONPATH=ci_review uv run --project ../.. python -m ci_review tests src/orders
 `CI_REVIEW_MODEL` (default `claude-haiku-4-5`), `CI_REVIEW_BUDGET_USD` and
 `CI_REVIEW_TIMEOUT` override the pinned settings.
 
-In CI: `.github/workflows/claude-review.yml`, on every push to a PR.
+In CI: `.github/workflows/claude-review.yml` — **manual only**. The repo already runs
+`Claude Code Review` on every PR, and two reviewers commenting on one diff is how a PR gets
+muted, so the `pull_request` trigger is commented out. Run it against a PR on demand:
+
+```bash
+gh workflow run claude-review -f pr=5
+```
+
+Uncomment the trigger to put it back on every push; the job body is unchanged either way.
 
 ## The four decisions
 
