@@ -39,18 +39,23 @@ jobs:
                  detected_pattern: (.body | capture("pattern: `(?<p>[^`]+)`").p // "unknown")}]' \
             > prior.json || echo '[]' > prior.json
 
-      - name: Check the API key is configured
+      # Either credential works: the CLI reads CLAUDE_CODE_OAUTH_TOKEN natively, which is
+      # what this repo already has for the claude-code-action workflow. Checked here so a
+      # missing secret is named rather than surfacing as a CLI error six steps later.
+      - name: Check a credential is configured
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          test -n "$ANTHROPIC_API_KEY" || {
-            echo "::error::ANTHROPIC_API_KEY is not set in this repository's secrets."
+          test -n "$ANTHROPIC_API_KEY" || test -n "$CLAUDE_CODE_OAUTH_TOKEN" || {
+            echo "::error::Set either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in this repository's secrets."
             exit 1
           }
 
       - name: Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CI_REVIEW_MODEL: claude-haiku-4-5
           CI_REVIEW_BUDGET_USD: "2.00"
           # Two entries: the first makes `ci_review` importable as a package for
