@@ -16,3 +16,6 @@ headroom_memory.db
 
 # Secrets
 .env
+
+# Anthropic exam guide - download your own current copy, do not redistribute
+docs/*Exam Guide*.pdf
